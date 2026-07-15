@@ -1,0 +1,33 @@
+{
+  "name": "newspack/sandbox-sync",
+  "description": "Authenticated, staged WordPress source-to-sandbox synchronization.",
+  "type": "wordpress-muplugin",
+  "license": "GPL-2.0-or-later",
+  "require": {
+    "php": ">=7.4"
+  },
+  "require-dev": {
+    "dealerdirect/phpcodesniffer-composer-installer": "^1.1",
+    "phpstan/phpstan": "^2.2",
+    "szepeviktor/phpstan-wordpress": "^2.0",
+    "wp-coding-standards/wpcs": "^3.2"
+  },
+  "config": {
+    "allow-plugins": {
+      "dealerdirect/phpcodesniffer-composer-installer": true,
+      "phpstan/extension-installer": true
+    },
+    "optimize-autoloader": true,
+    "sort-packages": true
+  },
+  "scripts": {
+    "test": "@php tests/run-tests.php",
+    "lint": "phpcs --standard=phpcs.xml.dist",
+    "analyse": "phpstan analyse --configuration=phpstan.neon.dist --memory-limit=1G --no-progress --debug",
+    "check": [
+      "@test",
+      "@lint",
+      "@analyse"
+    ]
+  }
+}

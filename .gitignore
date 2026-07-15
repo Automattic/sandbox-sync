@@ -1,0 +1,8 @@
+/vendor/
+/.phpcs-cache
+/.phpstan.cache
+/*.tar.gz
+/scripts/push-wpcloud-test.sh
+.DS_Store
+._*
+__MACOSX/

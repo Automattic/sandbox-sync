@@ -1,0 +1,61 @@
+.sbs-cards { display: flex; flex-direction: column; gap: 20px; }
+.sbs-card { max-width: 1200px; width: 100%; box-sizing: border-box; padding: 8px 20px 16px; }
+
+/* Accordion */
+.sbs-accordion { margin: 12px 0; border: 1px solid #c3c4c7; border-radius: 4px; overflow: hidden; }
+.sbs-acc { border-bottom: 1px solid #c3c4c7; }
+.sbs-acc:last-child { border-bottom: none; }
+.sbs-acc > summary {
+	cursor: pointer; padding: 10px 14px; font-weight: 600; background: #f6f7f7;
+	list-style: none; position: relative; user-select: none;
+}
+.sbs-acc > summary::-webkit-details-marker { display: none; }
+.sbs-acc > summary::after {
+	content: '\f140'; font-family: dashicons; position: absolute; right: 10px; top: 50%;
+	transform: translateY(-50%); transition: transform .15s; color: #787c82; font-size: 20px;
+}
+.sbs-acc[open] > summary { border-bottom: 1px solid #e0e0e0; }
+.sbs-acc[open] > summary::after { transform: translateY(-50%) rotate(180deg); }
+.sbs-acc > summary:hover { background: #f0f0f1; }
+.sbs-acc-body { padding: 10px 14px 14px; background: #fff; }
+.sbs-acc-hint { font-weight: 400; color: #787c82; margin-left: 6px; font-size: 12px; }
+
+/* Pickers (plugins / constants lists) */
+.sbs-picker { max-height: 260px; overflow: auto; border: 1px solid #e0e0e0; border-radius: 3px; padding: 6px 10px; }
+.sbs-picker label { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; }
+.sbs-picker .sbs-meta { color: #787c82; font-size: 12px; }
+.sbs-picker code { font-size: 11px; background: #f6f7f7; padding: 1px 4px; }
+.sbs-picker .sbs-symlinked { opacity: .55; }
+
+/* Safety rules */
+.sbs-rule { display: flex; gap: 8px; align-items: baseline; padding: 5px 0; }
+
+/* Uploads year/month picker (foldable years) */
+#sbs-uploads-list.sbs-picker { padding: 0; }
+.sbs-year { border-bottom: 1px solid #f0f0f1; }
+.sbs-year:last-child { border-bottom: none; }
+.sbs-year-row {
+	display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+	cursor: pointer; user-select: none;
+}
+.sbs-year-row:hover { background: #f6f7f7; }
+.sbs-year-row > label { font-weight: 600; display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.sbs-year-sum { color: #787c82; font-size: 12px; flex: 1; }
+.sbs-year-chevron {
+	color: #787c82; font-size: 16px; line-height: 1; transition: transform .15s;
+}
+.sbs-year.open .sbs-year-chevron { transform: rotate(180deg); }
+.sbs-year-months {
+	display: none; flex-wrap: wrap; gap: 2px 16px;
+	padding: 4px 12px 12px 34px; background: #fafafa;
+}
+.sbs-year.open .sbs-year-months { display: flex; }
+.sbs-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; cursor: pointer; }
+.sbs-chip input { margin: 0; }
+.sbs-other-row { display: flex; align-items: center; gap: 6px; padding: 8px 12px; }
+
+/* Job status block: bold headline, one detail per line, muted note. */
+#sbs-job-statusline { margin: 0 0 10px; line-height: 1.7; }
+#sbs-job-statusline strong { display: block; font-size: 13px; }
+.sbs-status-line { display: block; color: #3c434a; }
+.sbs-status-note { display: block; color: #787c82; font-size: 12px; margin-top: 2px; }

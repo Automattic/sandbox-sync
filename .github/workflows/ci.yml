@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sandbox-sync-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime:
+    name: PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.3', '8.5']
+    steps:
+      - uses: actions/checkout@v6
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: PHP syntax
+        run: find . -name '*.php' -not -path './vendor/*' -print0 | xargs -0 -n1 php -l
+      - name: Dependency-free tests
+        run: php tests/run-tests.php
+      - name: Shell syntax
+        run: bash -n scripts/*.sh
+      - name: Admin JavaScript syntax
+        run: node --check mu-plugin/sandbox-sync/assets/admin.js
+
+  quality:
+    name: Standards and static analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          coverage: none
+          tools: composer
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install locked tools
+        run: composer install --no-interaction --prefer-dist
+      - name: Dependency audit
+        run: composer audit --locked
+      - name: Coding standards
+        run: composer lint
+      - name: Static analysis
+        run: composer analyse
+      - name: ShellCheck
+        run: shellcheck scripts/*.sh

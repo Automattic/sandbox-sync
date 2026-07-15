@@ -1,0 +1,135 @@
+name: WordPress integration
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sandbox-sync-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    name: WordPress ${{ matrix.wordpress }} / ${{ matrix.database.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        wordpress: ['6.9.4', '7.0.1']
+        database:
+          - name: MySQL 8.0
+            slug: mysql-8
+            image: mysql:8.0
+          - name: MariaDB 10.11
+            slug: mariadb-10-11
+            image: mariadb:10.11
+    services:
+      database:
+        image: ${{ matrix.database.image }}
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: bootstrap
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: curl, mysqli, openssl, zlib
+          coverage: none
+          tools: wp-cli
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install database client
+        run: sudo apt-get update -qq && sudo apt-get install -y default-mysql-client
+      - name: Create databases
+        run: mysql -h 127.0.0.1 -uroot -proot -e 'CREATE DATABASE source; CREATE DATABASE sandbox;'
+      - name: Install two WordPress sites
+        run: |
+          mkdir -p /tmp/source /tmp/sandbox
+          wp core download --version=${{ matrix.wordpress }} --path=/tmp/source --quiet
+          wp core download --version=${{ matrix.wordpress }} --path=/tmp/sandbox --quiet
+          wp config create --path=/tmp/source --dbname=source --dbuser=root --dbpass=root --dbhost=127.0.0.1:3306 --skip-check --quiet
+          wp config create --path=/tmp/sandbox --dbname=sandbox --dbuser=root --dbpass=root --dbhost=127.0.0.1:3306 --dbprefix=sb_ --skip-check --quiet
+          wp core install --path=/tmp/source --url=http://127.0.0.1:8081 --title=Source --admin_user=admin --admin_password=admin-password --admin_email=source@example.invalid --skip-email --quiet
+          wp core install --path=/tmp/sandbox --url=http://127.0.0.1:8082 --title=Sandbox --admin_user=admin --admin_password=sandbox-password --admin_email=sandbox@example.invalid --skip-email --quiet
+          wp db query --path=/tmp/sandbox "CREATE TABLE sb_newspack_newsletters_subscription_attempts (email varchar(150) NOT NULL, list_ids varchar(300) NOT NULL, created_at datetime NOT NULL, KEY (email)) ENGINE=InnoDB"
+          wp db query --path=/tmp/sandbox "INSERT INTO sb_newspack_newsletters_subscription_attempts VALUES ('sandbox-old@example.com', 'old-list', UTC_TIMESTAMP())"
+      - name: Install Sandbox Sync and fixtures
+        run: |
+          mkdir -p /tmp/source/wp-content/mu-plugins /tmp/sandbox/wp-content/mu-plugins
+          ln -s "$GITHUB_WORKSPACE/mu-plugin/sandbox-sync.php" /tmp/source/wp-content/mu-plugins/sandbox-sync.php
+          ln -s "$GITHUB_WORKSPACE/mu-plugin/sandbox-sync.php" /tmp/sandbox/wp-content/mu-plugins/sandbox-sync.php
+          wp config set SANDBOX_SYNC_TEST true --path=/tmp/source --type=constant --raw
+          wp post create --path=/tmp/source --post_type=post --post_status=publish --post_title='Integration sentinel' --post_content='Source URL http://127.0.0.1:8081' --quiet
+          wp db query --path=/tmp/source "CREATE TABLE wp_sandbox_sync_empty_keyless (event_name varchar(100) NOT NULL, created_at datetime NOT NULL) ENGINE=InnoDB"
+          wp db query --path=/tmp/source "CREATE TABLE wp_newspack_newsletters_subscription_attempts (email varchar(150) NOT NULL, list_ids varchar(300) NOT NULL, created_at datetime NOT NULL, KEY (email)) ENGINE=InnoDB"
+          wp db query --path=/tmp/source "INSERT INTO wp_newspack_newsletters_subscription_attempts VALUES ('reader@example.com', 'list-a,list-b', UTC_TIMESTAMP())"
+          mkdir -p /tmp/source/wp-content/uploads/fixture
+          printf 'unchanged across incremental syncs\n' >/tmp/source/wp-content/uploads/fixture/unchanged.txt
+          chmod 0640 /tmp/source/wp-content/uploads/fixture/unchanged.txt
+          touch -d @1234567890 /tmp/source/wp-content/uploads/fixture/unchanged.txt
+      - name: Start source and sandbox HTTP servers
+        run: |
+          php -S 127.0.0.1:8081 -t /tmp/source >/tmp/source-http.log 2>&1 &
+          echo $! >/tmp/source-http.pid
+          php -S 127.0.0.1:8082 -t /tmp/sandbox >/tmp/sandbox-http.log 2>&1 &
+          echo $! >/tmp/sandbox-http.pid
+          for attempt in {1..30}; do curl -fsS http://127.0.0.1:8081 >/dev/null && curl -fsS http://127.0.0.1:8082 >/dev/null && exit 0; sleep 1; done
+          exit 1
+      - name: Pair and sync
+        run: |
+          PAIRING_KEY="$(wp sandbox-sync generate-key --path=/tmp/source | tail -n1)"
+          wp sandbox-sync connect http://127.0.0.1:8081 "$PAIRING_KEY" --path=/tmp/sandbox
+          wp sandbox-sync mark-sandbox --path=/tmp/sandbox
+          CONSTANTS="$(wp sandbox-sync source-constants --path=/tmp/sandbox)"
+          grep -qx 'SANDBOX_SYNC_TEST' <<<"$CONSTANTS"
+          ! grep -q 'DB_PASSWORD\|AUTH_KEY\|=' <<<"$CONSTANTS"
+          wp eval-file "$GITHUB_WORKSPACE/fixtures/check-constants-scope.php" --path=/tmp/sandbox
+          wp eval-file "$GITHUB_WORKSPACE/fixtures/check-resumable-file.php" --path=/tmp/sandbox
+          wp sandbox-sync run --path=/tmp/sandbox --user=admin --constants=SANDBOX_SYNC_TEST --yes
+      - name: Verify activation, identity, safety and cleanup
+        run: |
+          test "$(wp post list --path=/tmp/sandbox --post_type=post --name=integration-sentinel --field=post_title)" = 'Integration sentinel'
+          test "$(wp option get home --path=/tmp/sandbox)" = 'http://127.0.0.1:8082'
+          test "$(wp user get admin --path=/tmp/sandbox --field=user_email)" = 'sandbox@example.invalid'
+          test "$(wp option get blog_public --path=/tmp/sandbox)" = '0'
+          test "$(wp option get sandbox_sync_block_email --path=/tmp/sandbox)" = '1'
+          test "$(wp db query --path=/tmp/sandbox --skip-column-names "SELECT COUNT(*) FROM sb_sandbox_sync_empty_keyless;")" = '0'
+          test "$(wp db query --path=/tmp/sandbox --skip-column-names "SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sb_sandbox_sync_empty_keyless' AND INDEX_NAME = 'PRIMARY';")" = '0'
+          test "$(wp db query --path=/tmp/sandbox --skip-column-names "SELECT COUNT(*) FROM sb_newspack_newsletters_subscription_attempts;")" = '0'
+          test "$(wp db query --path=/tmp/sandbox --skip-column-names "SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sb_newspack_newsletters_subscription_attempts' AND INDEX_NAME = 'PRIMARY';")" = '0'
+          wp eval --path=/tmp/sandbox 'exit(defined("SANDBOX_SYNC_TEST") && true === SANDBOX_SYNC_TEST ? 0 : 1);'
+          test "$(wp db query --path=/tmp/sandbox --skip-column-names "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND (TABLE_NAME LIKE 'ssx\\_%' OR TABLE_NAME LIKE 'ssxbak\\_%');")" = '0'
+          test ! -e /tmp/source/wp-content/.sandbox-sync-source-freeze.php
+          test -z "$(find /tmp/source/wp-content -maxdepth 1 -name '.sandbox-sync-transfer-*.php' -print -quit)"
+          curl -fsS http://127.0.0.1:8081 >/dev/null
+          wp sandbox-sync history --path=/tmp/sandbox --format=json | php -r '$v=json_decode(stream_get_contents(STDIN), true); exit(is_array($v) && count($v) ? 0 : 1);'
+      - name: Verify a second incremental database and media sync
+        run: |
+          printf 'new on second sync\n' >/tmp/source/wp-content/uploads/fixture/new.txt
+          printf 'sandbox-only stale upload\n' >/tmp/sandbox/wp-content/uploads/fixture/stale.txt
+          wp post create --path=/tmp/source --post_type=post --post_status=publish --post_title='Second-sync sentinel' --quiet
+          wp sandbox-sync run --path=/tmp/sandbox --user=admin --constants=SANDBOX_SYNC_TEST --yes
+          test "$(wp post list --path=/tmp/sandbox --post_type=post --name=second-sync-sentinel --field=post_title)" = 'Second-sync sentinel'
+          test "$(cat /tmp/sandbox/wp-content/uploads/fixture/new.txt)" = 'new on second sync'
+          test ! -e /tmp/sandbox/wp-content/uploads/fixture/stale.txt
+          test "$(stat -c %a /tmp/sandbox/wp-content/uploads/fixture/unchanged.txt)" = '640'
+          test "$(stat -c %Y /tmp/sandbox/wp-content/uploads/fixture/unchanged.txt)" = '1234567890'
+          test -z "$(find /tmp/sandbox/wp-content/.sandbox-sync-work -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)"
+      - name: Upload diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: http-logs-${{ matrix.wordpress }}-${{ matrix.database.slug }}
+          path: |
+            /tmp/source-http.log
+            /tmp/sandbox-http.log

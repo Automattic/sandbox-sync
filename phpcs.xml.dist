@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<ruleset name="Sandbox Sync">
+	<description>WordPress coding and security standards for Sandbox Sync.</description>
+
+	<file>mu-plugin</file>
+	<exclude-pattern>*/vendor/*</exclude-pattern>
+	<arg name="basepath" value="."/>
+	<arg name="colors"/>
+	<arg value="ps"/>
+	<arg name="extensions" value="php"/>
+	<arg name="warning-severity" value="0"/>
+
+	<rule ref="WordPress-Core"/>
+
+	<!-- This is an internal namespaced mu-plugin, not a wordpress.org slug. -->
+	<rule ref="WordPress.NamingConventions.PrefixAllGlobals">
+		<exclude-pattern>*/tests/*</exclude-pattern>
+		<properties>
+			<property name="prefixes" type="array">
+				<element value="SandboxSync"/>
+				<element value="sandbox_sync"/>
+				<element value="SANDBOX_SYNC"/>
+			</property>
+		</properties>
+	</rule>
+
+	<config name="minimum_supported_wp_version" value="6.9"/>
+	<config name="testVersion" value="7.4-"/>
+</ruleset>

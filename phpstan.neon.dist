@@ -1,0 +1,19 @@
+includes:
+    - vendor/szepeviktor/phpstan-wordpress/extension.neon
+
+parameters:
+    level: 3
+    paths:
+        - mu-plugin
+        - tests
+        - fixtures
+    excludePaths:
+        analyse:
+            - vendor
+    tmpDir: /tmp/sandbox-sync-phpstan
+    reportUnmatchedIgnoredErrors: true
+    treatPhpDocTypesAsCertain: false
+    bootstrapFiles:
+        - tests/phpstan-bootstrap.php
+    parallel:
+        maximumNumberOfProcesses: 1
