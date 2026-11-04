@@ -2,6 +2,15 @@
 
 All notable public changes are documented here. Sandbox Sync follows semantic versioning; before 1.0, minor releases may include protocol or configuration changes.
 
+## 0.1.1 - 2026-10-27
+
+Protocol 15. Both sites must run this release; a mismatch fails closed at the manifest handshake.
+
+### Fixed
+
+- Upload and code file names longer than the 100-byte ustar name field (common for long headline-based media names) no longer abort the transfer with `tar_long_path`. The exporter now emits GNU long-name records and both extractors restore the full path; a single path is bounded at 4096 bytes.
+- Staged code directories no longer fail SHA-256 validation when the source directory ships no `index.php` of its own (typically `mu-plugins/`): the staging placeholder is discarded before validation instead of being counted as an unexpected file.
+
 ## 0.1.0 - 2026-07-15
 
 Initial public release.

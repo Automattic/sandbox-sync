@@ -32,7 +32,7 @@ Database imports are built in job-owned shadow tables and do not replace active 
 
 The source and target must provide local rename semantics within `WP_CONTENT_DIR`. Staging is placed on the same filesystem as the active target. Hosts that forbid renaming the well-known `plugins/`, `mu-plugins/`, or `themes/` directories themselves (WP Cloud: `EPERM` on the directory inode) are still supported: Sandbox Sync evacuates and promotes top-level children instead of renaming the directory. The first uploads baseline additionally needs long-lived, unbuffered source responses and target PHP/cURL requests; test platform proxy/FPM timeouts with representative year sizes before production use. Symlinks are preserved locally but never traversed, exported, overwritten, or deleted. Unix modes and mtimes are retained where supported; ownership, ACLs and extended attributes are outside the protocol.
 
-Uploads must be a local filesystem tree with stable directory iteration and atomic rename behavior. Remote/object-backed stream wrappers, sparse-file fidelity, ownership, ACLs, and extended attributes are not supported by protocol 14.
+Uploads must be a local filesystem tree with stable directory iteration and atomic rename behavior. Remote/object-backed stream wrappers, sparse-file fidelity, ownership, ACLs, and extended attributes are not supported by protocol 15. Path components longer than the 100-byte ustar name field travel as GNU long-name records (protocol 15+); a single path may not exceed 4096 bytes.
 
 ## Scheduling and HTTP infrastructure
 

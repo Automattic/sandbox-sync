@@ -523,3 +523,41 @@ foreach ( array( '/link.txt', '/linkdir', '/top.txt', '/sub/mid.txt', '/linked-t
 @rmdir( $root . '/linked-target' );
 @rmdir( $root . '/sub' );
 @rmdir( $root );
+
+ss_test_section( 'Files: staged directory guard is discarded before validation' );
+
+// prepare_file_stage() writes a placeholder index.php into every new stage so
+// the web-reachable sidecar never lists or executes while files land. The
+// source manifest knows nothing about that placeholder, so validation must
+// see the stage without it; for mu-plugins/ (no index.php upstream) leaving
+// it behind both fails validation and, if activated, would load a 404 stub
+// as a must-use plugin.
+$guard_root  = sys_get_temp_dir() . '/ss-guard-test-' . bin2hex( random_bytes( 4 ) );
+$guard_stage = $guard_root . '/stage-mu-plugins';
+mkdir( $guard_stage, 0755, true );
+$discard_guard = new ReflectionMethod( Sync_Runner::class, 'discard_stage_guard' );
+
+file_put_contents( $guard_stage . '/index.php', "<?php http_response_code( 404 ); exit;\n" );
+file_put_contents( $guard_stage . '/zz-test-notice.php', "<?php // synced mu-plugin\n" );
+$discard_guard->invoke( null, $guard_stage );
+ss_assert( ! file_exists( $guard_stage . '/index.php' ), 'the staging placeholder index.php is removed before validation' );
+ss_assert( file_exists( $guard_stage . '/zz-test-notice.php' ), 'synced files next to the placeholder are untouched' );
+
+file_put_contents( $guard_stage . '/index.php', "<?php\n// Silence is golden.\n" );
+$discard_guard->invoke( null, $guard_stage );
+ss_assert_same( "<?php\n// Silence is golden.\n", @file_get_contents( $guard_stage . '/index.php' ), 'an index.php delivered by the source replaces the placeholder and is kept' );
+@unlink( $guard_stage . '/index.php' );
+
+file_put_contents( $guard_root . '/outside-index.php', "<?php http_response_code( 404 ); exit;\n" );
+symlink( $guard_root . '/outside-index.php', $guard_stage . '/index.php' );
+$discard_guard->invoke( null, $guard_stage );
+ss_assert( is_link( $guard_stage . '/index.php' ), 'a symlinked index.php in the stage is never treated as the placeholder' );
+ss_assert( file_exists( $guard_root . '/outside-index.php' ), 'symlink targets are never deleted' );
+
+ss_assert_same( null, $discard_guard->invoke( null, $guard_root . '/missing-stage' ), 'a stage without any index.php is a no-op' );
+
+@unlink( $guard_stage . '/index.php' );
+@unlink( $guard_stage . '/zz-test-notice.php' );
+@unlink( $guard_root . '/outside-index.php' );
+@rmdir( $guard_stage );
+@rmdir( $guard_root );

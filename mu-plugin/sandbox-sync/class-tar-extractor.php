@@ -52,6 +52,7 @@ class Tar_Extractor {
 		$actual_map    = array();
 		$manifest_raw  = null;
 		$manifest_seen = false;
+		$long_name     = null;
 		if ( is_array( $verification ) ) {
 			foreach ( $verification['expected'] as $entry ) {
 				if ( ! is_array( $entry ) || ! isset( $entry['p'], $entry['s'], $entry['m'] ) || ! Tar_Exporter::is_safe_relative_path( $entry['p'] )
@@ -69,6 +70,10 @@ class Tar_Extractor {
 				return new \WP_Error( 'tar_truncated', 'Archive ended before its end-of-archive marker.' );
 			}
 			if ( '' === rtrim( $header, "\0" ) ) {
+				if ( null !== $long_name ) {
+					fclose( $fh );
+					return new \WP_Error( 'tar_longname', 'Archive ends after a long-name record that names no entry.' );
+				}
 				$second = self::read_exact( $fh, 512 );
 				if ( false === $second || '' !== rtrim( $second, "\0" ) ) {
 					fclose( $fh );
@@ -91,7 +96,30 @@ class Tar_Extractor {
 				fclose( $fh );
 				return new \WP_Error( 'tar_limit', 'Archive exceeds the configured decompressed payload limit.' );
 			}
+			if ( 'L' === $type ) {
+				if ( null !== $long_name || Tar_Exporter::GNU_LONG_NAME !== $name || $size < 1 || $size > Tar_Exporter::LONG_NAME_MAX ) {
+					fclose( $fh );
+					return new \WP_Error( 'tar_longname', 'Archive contains a malformed long-name record.' );
+				}
+				$record = self::read_exact( $fh, $size );
+				$pad    = ( 512 - ( $size % 512 ) ) % 512;
+				$padding = $pad > 0 ? self::read_exact( $fh, $pad ) : '';
+				if ( false === $record || false === $padding ) {
+					fclose( $fh );
+					return new \WP_Error( 'tar_truncated', 'Archive long-name record is truncated.' );
+				}
+				$long_name = rtrim( $record, "\0" );
+				if ( '' === $long_name || false !== strpos( $long_name, "\0" ) || '' !== rtrim( $padding, "\0" ) ) {
+					fclose( $fh );
+					return new \WP_Error( 'tar_longname', 'Archive contains a malformed long-name record.' );
+				}
+				continue;
+			}
 			$path = '' !== $prefix ? $prefix . '/' . $name : $name;
+			if ( null !== $long_name ) {
+				$path      = $long_name;
+				$long_name = null;
+			}
 			if ( '5' === $type ) {
 				$path = rtrim( $path, '/' );
 			}

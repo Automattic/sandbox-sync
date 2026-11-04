@@ -30,6 +30,8 @@ class Tar_Stream_Extractor {
 	private $files = 0;
 	private $directories = 0;
 	private $last_installed = '';
+	private $long_name = null;
+	private $long_name_buffer = '';
 
 	public function __construct( $dest_dir, $temp_dir, $scopes, $max_payload ) {
 		$this->dest_dir    = rtrim( $dest_dir, '/' );
@@ -79,6 +81,10 @@ class Tar_Stream_Extractor {
 				$header       = substr( $this->buffer, 0, 512 );
 				$this->buffer = (string) substr( $this->buffer, 512 );
 				if ( '' === rtrim( $header, "\0" ) ) {
+					if ( null !== $this->long_name ) {
+						$this->fail( 'tar_stream_longname', 'The baseline tar ends after a long-name record that names no entry.' );
+						continue;
+					}
 					$this->state = 'eot' === $this->state ? 'done' : 'eot';
 					continue;
 				}
@@ -107,6 +113,26 @@ class Tar_Stream_Extractor {
 				}
 				$this->remaining    -= $take;
 				$this->payload_bytes += $take;
+				continue;
+			}
+
+			if ( 'longname' === $this->state ) {
+				$needed = $this->remaining + $this->padding;
+				if ( strlen( $this->buffer ) < $needed ) {
+					break;
+				}
+				$record       = substr( $this->buffer, 0, $this->remaining );
+				$pad          = substr( $this->buffer, $this->remaining, $this->padding );
+				$this->buffer = (string) substr( $this->buffer, $needed );
+				$name         = rtrim( $record, "\0" );
+				if ( '' === $name || false !== strpos( $name, "\0" ) || '' !== rtrim( $pad, "\0" ) ) {
+					$this->fail( 'tar_stream_longname', 'The baseline tar contains a malformed long-name record.' );
+					continue;
+				}
+				$this->long_name = $name;
+				$this->remaining = 0;
+				$this->padding   = 0;
+				$this->state     = 'header';
 				continue;
 			}
 
@@ -140,7 +166,7 @@ class Tar_Stream_Extractor {
 		if ( is_wp_error( $this->error ) ) {
 			return $this->error;
 		}
-		if ( 'done' !== $this->state || '' !== $this->buffer || null !== $this->current_handle ) {
+		if ( 'done' !== $this->state || '' !== $this->buffer || null !== $this->current_handle || null !== $this->long_name ) {
 			$this->fail( 'tar_stream_truncated', 'The baseline uploads stream ended before the complete tar end marker.' );
 			return $this->error;
 		}
@@ -181,7 +207,21 @@ class Tar_Stream_Extractor {
 		$name   = rtrim( substr( $header, 0, 100 ), "\0" );
 		$prefix = rtrim( substr( $header, 345, 155 ), "\0" );
 		$type   = substr( $header, 156, 1 );
-		$path   = '' !== $prefix ? $prefix . '/' . $name : $name;
+		if ( 'L' === $type ) {
+			if ( null !== $this->long_name || Tar_Exporter::GNU_LONG_NAME !== $name || $size < 1 || $size > Tar_Exporter::LONG_NAME_MAX ) {
+				$this->fail( 'tar_stream_longname', 'The baseline tar contains a malformed long-name record.' );
+				return;
+			}
+			$this->remaining = $size;
+			$this->padding   = ( 512 - ( $size % 512 ) ) % 512;
+			$this->state     = 'longname';
+			return;
+		}
+		$path = '' !== $prefix ? $prefix . '/' . $name : $name;
+		if ( null !== $this->long_name ) {
+			$path            = $this->long_name;
+			$this->long_name = null;
+		}
 		if ( '5' === $type ) {
 			$path = rtrim( $path, '/' );
 		}

@@ -294,10 +294,90 @@ $truncated_tar = $base . '/truncated.tar';
 file_put_contents( $truncated_tar, substr( file_get_contents( $tar_file ), 0, -512 ) );
 ss_assert( is_wp_error( Tar_Extractor::extract( $truncated_tar, $base . '/truncated-dst' ) ), 'archive missing second EOT block is rejected' );
 
-// Ustar-unrepresentable paths fail rather than being silently truncated.
+ss_test_section( 'Tar: GNU long names for paths the ustar fields cannot hold' );
+
+// Real-world media names (Spanish headlines as file names) exceed the 100-byte
+// ustar name field in a single component, so no name/prefix split exists.
+// Those entries travel as a GNU "././@LongLink" (type L) record and must
+// round-trip through every archive path instead of aborting the transfer.
+$long_name = 'Fotos-de-funeraria-San-Martin-quien-apoyo-con-los-traslados-de-los-cuerpos-de-Luis-Alberto-y-Maria-del-Carmen-en-la-comunidad-1.jpeg';
+$long_dir  = str_repeat( 'directorio-con-un-nombre-muy-largo-', 3 ) . 'fin';
+ss_assert( strlen( $long_name ) > 100 && strlen( $long_dir ) > 100, 'fixture names exceed the ustar name field' );
+
 $long_src = $base . '/long-src';
-mkdir( $long_src . '/a', 0755, true );
-file_put_contents( $long_src . '/a/' . str_repeat( 'b', 101 ), 'long' );
-ss_assert( is_wp_error( Tar_Exporter::validate_tree( $long_src ) ), 'unrepresentable ustar path is rejected during preflight' );
+mkdir( $long_src . '/a/' . $long_dir, 0755, true );
+file_put_contents( $long_src . '/a/' . $long_name, 'long file content' );
+file_put_contents( $long_src . '/a/' . $long_dir . '/inside.txt', 'inside long dir' );
+file_put_contents( $long_src . '/a/short.txt', 'short' );
+ss_assert_same( true, Tar_Exporter::validate_tree( $long_src ), 'preflight accepts single components longer than 100 bytes' );
+
+$long_tar = $base . '/long.tar';
+ob_start();
+Tar_Exporter::stream( $long_src );
+file_put_contents( $long_tar, ob_get_clean() );
+$long_dst = $base . '/long-dst';
+ss_assert_same( true, Tar_Extractor::extract( $long_tar, $long_dst ), 'full-directory archive with long names extracts' );
+ss_assert_same( 'long file content', @file_get_contents( $long_dst . '/a/' . $long_name ), 'long file name is restored exactly by the batch extractor' );
+ss_assert_same( 'inside long dir', @file_get_contents( $long_dst . '/a/' . $long_dir . '/inside.txt' ), 'long directory name is restored exactly by the batch extractor' );
+ss_assert_same( 'short', @file_get_contents( $long_dst . '/a/short.txt' ), 'short names next to long names still extract' );
+
+ss_assert( is_array( Tar_Exporter::prepare_paths( $long_src, array( 'a/' . $long_name ) ) ), 'verified batch planning accepts a long file name' );
+$long_full = $long_src . '/a/' . $long_name;
+$long_plan = array(
+	array(
+		'p' => 'a/' . $long_name,
+		's' => filesize( $long_full ),
+		'm' => filemtime( $long_full ),
+		'o' => fileperms( $long_full ) & 0777,
+	),
+);
+$long_nonce = hash( 'sha256', 'long-nonce' );
+$long_token = 'long-token';
+ob_start();
+Tar_Exporter::stream_verified_paths( $long_src, $long_plan, 'uploads', $long_nonce, $long_token );
+$long_verified_tar = $base . '/long-verified.tar';
+file_put_contents( $long_verified_tar, ob_get_clean() );
+$long_verified_dst = $base . '/long-verified-dst';
+$long_verified     = Tar_Extractor::extract_verified( $long_verified_tar, $long_verified_dst, 'uploads', $long_nonce, $long_token, $long_plan );
+ss_assert( is_array( $long_verified ) && 1 === count( $long_verified ) && $long_verified[0]['p'] === 'a/' . $long_name, 'verified batch manifest binds to the restored long path' );
+ss_assert_same( 'long file content', @file_get_contents( $long_verified_dst . '/a/' . $long_name ), 'verified batch extracts the long file name' );
+
+$long_bulk_src = $base . '/long-bulk-src';
+mkdir( $long_bulk_src . '/2026/01', 0755, true );
+mkdir( $long_bulk_src . '/2025-temp/10', 0755, true );
+file_put_contents( $long_bulk_src . '/2026/01/' . $long_name, 'dated long media' );
+file_put_contents( $long_bulk_src . '/2026/01/zz-after.jpg', 'after the long one' );
+file_put_contents( $long_bulk_src . '/2025-temp/10/' . $long_name, 'non-dated long media' );
+ob_start();
+$long_bulk_streamed = Tar_Exporter::stream_upload_scopes( $long_bulk_src, array( '2026/01', 'other' ) );
+$long_bulk_bytes    = ob_get_clean();
+ss_assert_same( true, $long_bulk_streamed, 'baseline stream no longer aborts on a long media name' );
+$long_bulk_dst      = $base . '/long-bulk-dst';
+$long_bulk_receiver = new Tar_Stream_Extractor( $long_bulk_dst, $base . '/long-bulk-tmp', array( '2026/01', 'other' ), 10485760 );
+$offset = 0;
+while ( $offset < strlen( $long_bulk_bytes ) ) {
+	$chunk   = substr( $long_bulk_bytes, $offset, 300 );
+	$offset += strlen( $chunk );
+	if ( strlen( $chunk ) !== $long_bulk_receiver->write( $chunk ) ) {
+		break;
+	}
+}
+$long_bulk_result = $long_bulk_receiver->finish();
+ss_assert( is_array( $long_bulk_result ) && 3 === $long_bulk_result['files'], 'streaming extractor installs every file including long names' );
+ss_assert_same( 'dated long media', @file_get_contents( $long_bulk_dst . '/2026/01/' . $long_name ), 'streaming extractor restores a long dated media name' );
+ss_assert_same( 'non-dated long media', @file_get_contents( $long_bulk_dst . '/2025-temp/10/' . $long_name ), 'streaming extractor restores a long name under a non-dated partition' );
+ss_assert_same( '2026/01/zz-after.jpg', is_array( $long_bulk_result ) ? $long_bulk_result['last_installed'] : '', 'resume cursor keeps tracking after a long-named file' );
+
+// A long-name record must be followed by the entry it names. Keep only the
+// first long-name record of the baseline stream (its header plus data block)
+// and end the archive there: both extractors must refuse the dangling record.
+$dangling = substr( $long_bulk_bytes, 512 * 2, 1024 ) . str_repeat( "\0", 1024 );
+ss_assert_same( 'L', substr( $dangling, 156, 1 ), 'fixture isolates a long-name record' );
+$dangling_tar = $base . '/dangling.tar';
+file_put_contents( $dangling_tar, $dangling );
+ss_assert( is_wp_error( Tar_Extractor::extract( $dangling_tar, $base . '/dangling-dst' ) ), 'batch extractor rejects a long-name record that names nothing' );
+$dangling_receiver = new Tar_Stream_Extractor( $base . '/dangling-stream-dst', $base . '/dangling-stream-tmp', array( '2026/01', 'other' ), 10485760 );
+$dangling_receiver->write( $dangling );
+ss_assert( is_wp_error( $dangling_receiver->finish() ), 'streaming extractor rejects a long-name record that names nothing' );
 
 ss_test_rmrf( $base );

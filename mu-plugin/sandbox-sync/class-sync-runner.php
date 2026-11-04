@@ -529,7 +529,7 @@ class Sync_Runner {
 				if ( $job['current'] >= count( $job['steps'] ) ) {
 					$job['status']      = Job::S_DONE;
 					$job['finished_at'] = time();
-					Job::log( $job, sprintf( 'Sync complete in %ds.', time() - (int) $job['created_at'] ) );
+					Job::log( $job, sprintf( 'Sync complete in %s.', Job::format_duration( time() - (int) $job['created_at'] ) ) );
 				}
 
 				$job['heartbeat'] = time();

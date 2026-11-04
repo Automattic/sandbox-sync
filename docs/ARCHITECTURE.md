@@ -2,7 +2,7 @@
 
 Sandbox Sync is a WordPress must-use plugin installed on both a live (source) site and one or more sandboxes. The sandbox pulls selected database tables and `wp-content` directories over authenticated HTTPS. Database/code changes stage before guarded activation; uploads update in place with bounded failure recovery.
 
-Protocol version: `SANDBOX_SYNC_PROTOCOL` (currently 14). Product version: `SANDBOX_SYNC_VERSION` (currently 0.1.0).
+Protocol version: `SANDBOX_SYNC_PROTOCOL` (currently 15). Product version: `SANDBOX_SYNC_VERSION` (currently 0.1.1).
 
 Related docs: [COMPATIBILITY](COMPATIBILITY.md) · [THREAT-MODEL](THREAT-MODEL.md) · [RECOVERY](RECOVERY.md) · [SECURITY](../SECURITY.md)
 

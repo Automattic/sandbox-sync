@@ -1708,8 +1708,34 @@ trait Sync_Runner_Files {
 		return true;
 	}
 
+	/**
+	 * Placeholder written into a fresh stage so the web-reachable sidecar never
+	 * lists or executes while files land. The source manifest never contains it.
+	 */
+	private static function stage_guard_content() {
+		return "<?php http_response_code( 404 ); exit;\n";
+	}
+
+	/**
+	 * Removes the staging placeholder before validation. A source-delivered
+	 * index.php (plugins/ and themes/ normally ship one) overwrote the
+	 * placeholder during extraction and is kept; mu-plugins/ rarely has one,
+	 * and activating the placeholder there would load a 404 stub as a
+	 * must-use plugin on every request.
+	 */
+	private static function discard_stage_guard( $stage ) {
+		$guard = $stage . '/index.php';
+		if ( is_link( $guard ) || ! is_file( $guard ) ) {
+			return;
+		}
+		if ( @file_get_contents( $guard ) === self::stage_guard_content() ) {
+			@unlink( $guard );
+		}
+	}
+
 	/** @return true|\WP_Error */
 	private static function validate_staged_dir( &$job, $dir, $stage, $active_target ) {
+		self::discard_stage_guard( $stage );
 		$manifest_file = self::file_work_root( $job ) . '/validation-' . preg_replace( '/[^a-z0-9_-]/i', '_', $dir ) . '.ndjson';
 		$remote_count  = Client::download_file_manifest( $dir, $manifest_file, true );
 		if ( is_wp_error( $remote_count ) ) {
@@ -2151,7 +2177,7 @@ trait Sync_Runner_Files {
 		if ( ! mkdir( $stage, 0755, true ) ) {
 			return new \WP_Error( 'stage_mkdir', "Cannot create stage {$stage}." );
 		}
-		@file_put_contents( $stage . '/index.php', "<?php http_response_code( 404 ); exit;\n" );
+		@file_put_contents( $stage . '/index.php', self::stage_guard_content() );
 
 		if ( $clone_active ) {
 			$clone_state = null;

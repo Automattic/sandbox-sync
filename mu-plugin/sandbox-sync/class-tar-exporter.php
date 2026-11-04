@@ -19,6 +19,15 @@ class Tar_Exporter {
 	const USTAR_MAX_SIZE = 8589934591; // Eleven octal digits: 8 GiB minus 1 byte.
 
 	/**
+	 * GNU long-name record: paths that fit neither the 100-byte name field
+	 * nor a name/prefix split are carried in a preceding type-L entry whose
+	 * payload is the full path. Both extractors restore it; this bound keeps
+	 * a hostile record from forcing an unbounded path buffer.
+	 */
+	const GNU_LONG_NAME     = '././@LongLink';
+	const LONG_NAME_MAX     = 4096;
+
+	/**
 	 * Streams the CONTENTS of $base_dir as a tar archive to the output
 	 * buffer, ending with the standard 1024-byte end-of-archive marker.
 	 * Top-level (and nested) symlinks are skipped.
@@ -263,7 +272,7 @@ class Tar_Exporter {
 			if ( ! self::is_safe_relative_path( $path ) ) {
 				return new \WP_Error( 'tar_path', 'Unsafe archive path requested.' );
 			}
-			if ( ! self::can_pack_name( $path ) ) {
+			if ( strlen( $path ) > self::LONG_NAME_MAX ) {
 				return new \WP_Error( 'tar_long_path', "Path cannot be represented safely in ustar: {$path}" );
 			}
 
@@ -321,7 +330,7 @@ class Tar_Exporter {
 			if ( ! self::is_safe_relative_path( rtrim( $path, '/' ) ) ) {
 				return new \WP_Error( 'tar_path', "Unsafe path in source tree: {$path}" );
 			}
-			if ( ! self::can_pack_name( $path ) ) {
+			if ( strlen( $path ) > self::LONG_NAME_MAX ) {
 				return new \WP_Error( 'tar_long_path', "Path cannot be represented safely in ustar: {$path}" );
 			}
 			$metadata = self::validate_ustar_metadata( $path, $item->getPathname(), $item->isDir() );
@@ -468,7 +477,7 @@ class Tar_Exporter {
 	 * @return true|\WP_Error
 	 */
 	private static function stream_scope_directory( $full, $rel, $checkpoint, $resume_after ) {
-		if ( ! self::is_safe_relative_path( $rel ) || ! self::can_pack_name( $rel . '/' ) ) {
+		if ( ! self::is_safe_relative_path( $rel ) || strlen( $rel ) + 1 > self::LONG_NAME_MAX ) {
 			return new \WP_Error( 'tar_long_path', "Path cannot be represented safely in ustar: {$rel}/" );
 		}
 		$mtime    = @filemtime( $full );
@@ -525,7 +534,7 @@ class Tar_Exporter {
 	 * @return true|\WP_Error
 	 */
 	private static function emit_scope_file( $rel_path, $real_path, $checkpoint ) {
-		if ( ! self::is_safe_relative_path( $rel_path ) || ! self::can_pack_name( $rel_path ) ) {
+		if ( ! self::is_safe_relative_path( $rel_path ) || strlen( $rel_path ) > self::LONG_NAME_MAX ) {
 			return new \WP_Error( 'tar_long_path', "Path cannot be represented safely in ustar: {$rel_path}" );
 		}
 		$fh = @fopen( $real_path, 'rb' );
@@ -627,17 +636,36 @@ class Tar_Exporter {
 			);
 		}
 
-		// Every caller preflights representability. Keep this defensive branch
-		// non-truncating so a future caller cannot create path collisions.
+		// Unreachable: build_header() carries such paths in a GNU long-name
+		// record and only packs a placeholder here. Never truncate silently.
 		self::abort( "unrepresentable ustar path: {$path}" );
 	}
 
+	/**
+	 * Builds the header block(s) for one entry. A path the ustar fields cannot
+	 * hold is preceded by a GNU type-L record carrying the full path; its own
+	 * header then holds a 100-byte placeholder that extractors replace.
+	 */
 	private static function build_header( $path, $size, $mtime, $mode, $typeflag ) {
 		if ( $size < 0 || $mtime < 0 || $mode < 0 || $size > self::USTAR_MAX_SIZE || $mtime > self::USTAR_MAX_SIZE || $mode > 2097151 ) {
 			self::abort( "numeric metadata cannot be represented safely in ustar: {$path}" );
 		}
-		$name_parts = self::pack_name( $path );
+		if ( self::can_pack_name( $path ) ) {
+			return self::build_raw_header( self::pack_name( $path ), $size, $mtime, $mode, $typeflag );
+		}
+		if ( strlen( $path ) > self::LONG_NAME_MAX ) {
+			self::abort( "unrepresentable ustar path: {$path}" );
+		}
+		$payload = $path . "\0";
+		$padded  = $payload . str_repeat( "\0", ( 512 - ( strlen( $payload ) % 512 ) ) % 512 );
+		$record  = self::build_raw_header( self::pack_name( self::GNU_LONG_NAME ), strlen( $payload ), 0, 0644, 'L' ) . $padded;
+		// Placeholder name: the first 100 bytes, never NUL-led, so a reader
+		// without long-name support still sees a well-formed header.
+		$placeholder = array( str_pad( substr( $path, 0, 100 ), 100, "\0" ), str_repeat( "\0", 155 ) );
+		return $record . self::build_raw_header( $placeholder, $size, $mtime, $mode, $typeflag );
+	}
 
+	private static function build_raw_header( $name_parts, $size, $mtime, $mode, $typeflag ) {
 		$header  = $name_parts[0];                                              // name:     0-99   (100)
 		$header .= str_pad( decoct( $mode ), 7, '0', STR_PAD_LEFT ) . "\0";     // mode:   100-107    (8)
 		$header .= str_pad( decoct( 0 ), 7, '0', STR_PAD_LEFT ) . "\0";         // uid:    108-115    (8)
