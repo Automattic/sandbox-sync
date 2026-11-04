@@ -536,6 +536,9 @@ $guard_root  = sys_get_temp_dir() . '/ss-guard-test-' . bin2hex( random_bytes( 4
 $guard_stage = $guard_root . '/stage-mu-plugins';
 mkdir( $guard_stage, 0755, true );
 $discard_guard = new ReflectionMethod( Sync_Runner::class, 'discard_stage_guard' );
+if ( PHP_VERSION_ID < 80100 ) {
+	$discard_guard->setAccessible( true );
+}
 
 file_put_contents( $guard_stage . '/index.php', "<?php http_response_code( 404 ); exit;\n" );
 file_put_contents( $guard_stage . '/zz-test-notice.php', "<?php // synced mu-plugin\n" );
