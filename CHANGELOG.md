@@ -15,6 +15,7 @@ Protocol 16. Both sites must run this release; a mismatch fails closed at the ma
 
 - The WordPress integration workflow's second sync passes `--audit-uploads`, because its fixture writes files straight into `uploads/` and generation tracking only sees WordPress-managed media by design.
 
+## 0.1.1 - 2026-10-27
 
 Protocol 15. Both sites must run this release; a mismatch fails closed at the manifest handshake.
 
