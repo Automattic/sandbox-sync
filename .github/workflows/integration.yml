@@ -118,7 +118,9 @@ jobs:
           printf 'new on second sync\n' >/tmp/source/wp-content/uploads/fixture/new.txt
           printf 'sandbox-only stale upload\n' >/tmp/sandbox/wp-content/uploads/fixture/stale.txt
           wp post create --path=/tmp/source --post_type=post --post_status=publish --post_title='Second-sync sentinel' --quiet
-          wp sandbox-sync run --path=/tmp/sandbox --user=admin --constants=SANDBOX_SYNC_TEST --yes
+          # Fixture files are written straight into uploads/, bypassing WordPress, so
+          # generation tracking cannot see them; --audit-uploads metadata-scans the tree.
+          wp sandbox-sync run --path=/tmp/sandbox --user=admin --constants=SANDBOX_SYNC_TEST --audit-uploads --yes
           test "$(wp post list --path=/tmp/sandbox --post_type=post --name=second-sync-sentinel --field=post_title)" = 'Second-sync sentinel'
           test "$(cat /tmp/sandbox/wp-content/uploads/fixture/new.txt)" = 'new on second sync'
           test ! -e /tmp/sandbox/wp-content/uploads/fixture/stale.txt

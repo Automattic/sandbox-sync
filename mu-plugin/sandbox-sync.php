@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Sandbox Sync
  * Description: Pair a live site with its sandbox and pull-sync the database, plugins, mu-plugins, themes and uploads from live to sandbox over authenticated HTTP.
- * Version: 0.1.1
+ * Version: 0.1.2
  * Author: Newspack
  *
  * Install this file (or a symlink to it) in wp-content/mu-plugins/ on BOTH
@@ -18,8 +18,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 if ( defined( 'SANDBOX_SYNC_VERSION' ) ) {
 	return;
 }
-define( 'SANDBOX_SYNC_VERSION', '0.1.1' );
-define( 'SANDBOX_SYNC_PROTOCOL', 15 );
+define( 'SANDBOX_SYNC_VERSION', '0.1.2' );
+define( 'SANDBOX_SYNC_PROTOCOL', 16 );
 
 // PHP resolves symlinks for __FILE__/__DIR__, so this points at the real repo
 // checkout even when this loader is symlinked into mu-plugins/.

@@ -28,16 +28,44 @@ class DB_Exporter {
 
 	/**
 	 * Structural CREATE TABLE text for schema hashing/comparison.
-	 * Strips AUTO_INCREMENT=N so a busy live table does not look like a
-	 * schema change mid-job when only the counter advanced.
+	 *
+	 * The hash compares a source table with its sandbox copy (different
+	 * prefix), with a job's shadow table (different name again) and with
+	 * the same table on a different server, so everything that SHOW CREATE
+	 * TABLE prints without describing the structure is dropped:
+	 *
+	 * - the table name;
+	 * - AUTO_INCREMENT=N, so a busy live table does not look like a schema
+	 *   change mid-job when only the counter advanced;
+	 * - a column CHARACTER SET equal to the table's DEFAULT CHARSET, and a
+	 *   column COLLATE equal to the table's explicit COLLATE=. MySQL 8 prints
+	 *   `text COLLATE x` for a dbDelta-created column but `text CHARACTER
+	 *   SET utf8mb4 COLLATE x` once that statement is executed again, and
+	 *   MariaDB prints neither; all three describe the same column. A column
+	 *   whose charset or collation really differs from the table default
+	 *   keeps its clause and still changes the hash.
 	 *
 	 * @param string $sql SHOW CREATE TABLE statement.
 	 */
 	public static function normalize_create_sql( $sql ) {
 		$sql = (string) $sql;
+		$sql = preg_replace( '/^CREATE TABLE `(?:[^`]|``)+`/', 'CREATE TABLE `_`', $sql, 1 );
 		// Trailing table options: ENGINE=InnoDB AUTO_INCREMENT=12345 DEFAULT CHARSET=...
 		$sql = preg_replace( '/\sAUTO_INCREMENT=\d+/i', '', $sql );
-		return $sql;
+
+		$close = strrpos( $sql, ')' );
+		if ( false === $close ) {
+			return $sql;
+		}
+		$body    = substr( $sql, 0, $close );
+		$options = substr( $sql, $close );
+		if ( preg_match( '/\bDEFAULT CHARSET=(\w+)/i', $options, $m ) ) {
+			$body = preg_replace( '/\sCHARACTER SET ' . preg_quote( $m[1], '/' ) . '(?=\s|,|$)/i', '', $body );
+		}
+		if ( preg_match( '/\bCOLLATE=(\w+)/i', $options, $m ) ) {
+			$body = preg_replace( '/\sCOLLATE ' . preg_quote( $m[1], '/' ) . '(?=\s|,|$)/i', '', $body );
+		}
+		return $body . $options;
 	}
 
 	/**

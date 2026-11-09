@@ -2,7 +2,19 @@
 
 All notable public changes are documented here. Sandbox Sync follows semantic versioning; before 1.0, minor releases may include protocol or configuration changes.
 
-## 0.1.1 - 2026-10-27
+## 0.1.2 - 2026-11-09
+
+Protocol 16. Both sites must run this release; a mismatch fails closed at the manifest handshake.
+
+### Fixed
+
+- Full table imports no longer fail with `schema_mismatch` on MySQL 8. `SHOW CREATE TABLE` there prints a dbDelta-created text column as `COLLATE x` but prints `CHARACTER SET utf8mb4 COLLATE x` once that statement is executed on the sandbox, so the exact-text comparison rejected every table on the first sync. The structural schema hash now ignores a column charset or collation equal to the table default, and ignores the table name, while a column that really differs still fails closed.
+- Row delta for posts and postmeta now works when the sandbox uses a different table prefix. The local schema check hashed `CREATE TABLE \`sb_posts\`` against the manifest hash of `wp_posts`, so every incremental sync silently fell back to a full import of both tables.
+
+### Changed
+
+- The WordPress integration workflow's second sync passes `--audit-uploads`, because its fixture writes files straight into `uploads/` and generation tracking only sees WordPress-managed media by design.
+
 
 Protocol 15. Both sites must run this release; a mismatch fails closed at the manifest handshake.
 
