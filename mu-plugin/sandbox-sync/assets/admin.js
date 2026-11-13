@@ -445,18 +445,33 @@ onClick( 'sbs-start', () => {
 
 	const background = document.getElementById( 'sbs-opt-background' ).checked;
 
-	const summary = 'This will OVERWRITE this site with content from the live site:\n\n'
-		+ ( options.db ? '• the ENTIRE database (except excluded tables; schema-only tables are emptied)\n' : '' )
+	// The mode sentences come from PHP (Start_Confirmation) so the CLI prompt
+	// uses the same words; the conditions below mirror its mode_lines(),
+	// outro() and safety_line(). They are missing when PHP still serves an
+	// older copy of the plugin than this script, right after an update.
+	const text = config.confirm;
+	if ( ! text ) { return notice( 'The plugin was just updated and this page is not consistent yet. Wait a moment, reload, and start the sync again.', false ); }
+	const incremental = options.incremental;
+	// Tracked uploads (the default on an incremental run) are compared folder
+	// by folder and get their own lines. Any other run treats uploads like the
+	// other directories and never reads rescan or adopt.
+	const uploadsSelected = dirs.includes( 'uploads' );
+	const uploadsTracked = uploadsSelected && incremental && options.uploads_fast;
+	const listedDirs = uploadsTracked ? dirs.filter( ( dir ) => 'uploads' !== dir ) : dirs;
+	const uploadsIgnored = uploadsSelected && ! uploadsTracked && ( options.uploads_full_audit || options.uploads_adopt );
+	const summary = text.intro + '\n\n'
+		+ ( options.db ? '• ' + text[ incremental ? 'db_incremental' : 'db_full' ] + '\n' : '' )
 		+ ( options.db && options.schema_only_tables.length ? '• schema-only tables recreated empty: ' + options.schema_only_tables.join( ', ' ) + '\n' : '' )
 		+ ( options.db ? '• the live site stays fully online during the export; busy tables are captured as of their own export moment\n' : '' )
-		+ ( dirs.length ? '• files: ' + dirs.join( ', ' ) + '\n' : '' )
-		+ ( options.plugins ? '• plugins limited to: ' + options.plugins.length + ' selected\n' : '' )
-		+ ( options.uploads_scope ? '• uploads limited to: ' + ( options.uploads_scope.length ? options.uploads_scope.join( ', ' ) : 'NOTHING' ) + '\n' : '' )
-		+ ( options.uploads_full_audit ? '• uploads: rescan every selected folder; only changed payloads are hashed\n' : '• uploads: fast dirty-month tracking for WordPress-managed changes\n' )
-		+ ( options.uploads_adopt ? '• uploads: never-synced folders adopt files already on this sandbox; nothing is cleared, only differences are downloaded\n' : '' )
+		+ ( listedDirs.length ? '• ' + text[ incremental ? 'files_incremental' : 'files_full' ].replace( '%s', listedDirs.join( ', ' ) ) + '\n' : '' )
+		+ ( dirs.includes( 'plugins' ) && options.plugins ? '• plugins limited to: ' + options.plugins.length + ' selected\n' : '' )
+		+ ( uploadsSelected && options.uploads_scope ? '• uploads limited to: ' + ( options.uploads_scope.length ? options.uploads_scope.join( ', ' ) : 'nothing' ) + '\n' : '' )
+		+ ( uploadsTracked ? '• ' + text[ options.uploads_full_audit ? 'uploads_audit' : 'uploads_tracked' ] + '\n' : '' )
+		+ ( uploadsTracked ? '• ' + text[ options.uploads_adopt ? 'uploads_adopt' : 'uploads_baseline' ] + '\n' : '' )
+		+ ( uploadsIgnored ? '• ' + text.uploads_ignored + '\n' : '' )
 		+ ( constants.length ? '• wp-config constants replicated: ' + constants.join( ', ' ) + '\n' : '' )
-		+ '• safety envelope enabled before activation; selected data rules: ' + ( safety.length ? safety.join( ', ' ) : 'NONE (production credentials will stay live!)' ) + '\n'
-		+ '\nThe current content of this site will be lost. Continue?';
+		+ '• ' + text.safety.replace( '%s', safety.length ? safety.join( ', ' ) : text.safety_none ) + '\n'
+		+ '\n' + text[ incremental ? 'outro_incremental' : 'outro_full' ];
 	if ( ! window.confirm( summary ) ) { return; }
 
 	post( { op: 'start_job', options: JSON.stringify( options ), background: background ? '1' : '0' } )

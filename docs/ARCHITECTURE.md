@@ -59,7 +59,7 @@ Pairing and sync share the same install so protocol, safety, and version stay al
 
 1. An admin must explicitly mark the site as a sandbox.
 2. A site that still has paired sandboxes refuses to be overwritten.
-3. The UI confirmation (and self-URL check) summarize what will be replaced.
+3. The start confirmation (UI and CLI) says what the chosen mode will replace, and the self-URL check refuses a site syncing onto itself.
 
 ### Job = durable step queue + fenced lease
 

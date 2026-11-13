@@ -25,12 +25,12 @@ One must-use plugin is installed on **both** the live site and each sandbox. The
 - One-time pairing codes (expire, single-use); source stores bearer **hashes** only; sandbox seals its token locally.
 - Per-sandbox revoke; token expiry and failure rate limits.
 - Explicit **sandbox flag** required before overwrite; sites that still have paired sandboxes refuse to be synced into.
-- UI confirmation summarizing what will be replaced; refuses syncing a site onto itself.
+- Start confirmation, in the UI and the CLI, that says what the chosen mode will replace; refuses syncing a site onto itself.
 
 ### Sync engine
 
 - Selective DB + `plugins/` / `mu-plugins/` / `themes/` / `uploads/`.
-- Incremental mode (file manifests + table `CHECKSUM TABLE` skips).
+- Incremental mode (**Skip unchanged tables and files**, on by default): file manifests + table `CHECKSUM TABLE` skips. A changed table or file is replaced with the live version, `posts`/`postmeta` post by post (row delta, below); sandbox edits in what is replaced are lost.
 - Background jobs (WP-Cron) or foreground UI/CLI slices with a fenced lease.
 - Cancel from sandbox; emergency `source-stop` on live.
 - Durable job log files + sync history.
@@ -70,7 +70,7 @@ Default-on rules scrub secrets, newsletter/Jetpack credentials, risky plugins, m
 - Sync options:
   - Database on/off; excluded tables; schema-only tables.
   - Directories: plugins, mu-plugins, themes, uploads.
-  - Incremental; run in background.
+  - Skip unchanged tables and files; run in background.
   - Adopt existing uploads / rescan all uploads (advanced).
   - Plugin picker, uploads year/month scopes, wp-config constants to replicate.
   - Safety rule checkboxes.
@@ -83,7 +83,7 @@ While the activation guard is up, the frontend returns 503; this admin screen an
 
 ## CLI (`wp sandbox-sync`)
 
-Run on the appropriate site (`--path=`). Destructive `run` asks for confirmation unless `--yes`.
+Run on the appropriate site (`--path=`). Destructive `run` asks for confirmation unless `--yes`; the prompt lists what the run will replace, by mode (`--full` or the default).
 
 | Command | Role | Purpose |
 |---------|------|---------|

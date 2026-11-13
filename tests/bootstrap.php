@@ -245,6 +245,7 @@ function is_wp_error( $thing ) {
 define( 'SANDBOX_SYNC_TEST_MU_DIR', dirname( __DIR__ ) . '/mu-plugin/sandbox-sync' );
 require_once SANDBOX_SYNC_TEST_MU_DIR . '/class-env.php';
 require_once SANDBOX_SYNC_TEST_MU_DIR . '/class-error-info.php';
+require_once SANDBOX_SYNC_TEST_MU_DIR . '/class-start-confirmation.php';
 require_once SANDBOX_SYNC_TEST_MU_DIR . '/class-db-exporter.php';
 require_once SANDBOX_SYNC_TEST_MU_DIR . '/class-table-delta.php';
 require_once SANDBOX_SYNC_TEST_MU_DIR . '/class-db-shell.php';
