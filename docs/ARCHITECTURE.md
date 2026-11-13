@@ -79,6 +79,17 @@ Each job opens a bearer-bound source grant limited to the selected tables/dirs/p
 
 Symlinks are never followed, exported as targets, overwritten, or deleted. Dev checkouts and the sandbox-sync loader itself can live as symlinks without being wiped.
 
+### Sandbox-only plugins and themes survive a sync
+
+A top-level entry of `plugins/` or `themes/` that is neither in live's manifest nor in the record of what the last sync wrote there was installed on the sandbox, so the sync keeps it. An entry in the record that live no longer has was removed on live, and is removed on the sandbox too.
+
+- **Left in place.** The plan step decides the kept set once per directory and stores it on the job (`kept_plugins`, `kept_themes`). Entries the sync leaves alone (kept ones, the protected plugin, and plugins a selection leaves out) are never copied into the stage, hashed, or moved. The content swap steps around them as it steps around symlinks, and so does a rollback, so work done in them while a long sync runs is still there afterwards. An entry that appears after the plan was made stays too, unless live delivers one of that name.
+- **Record.** `sandbox_sync_synced_plugins` and `sandbox_sync_synced_themes` are written by the finalize step, never earlier: a failed or cancelled sync rolls its files back and must leave the record as it was. A per-plugin selection updates the selected entries only. Names the sandbox holds as symlinks never enter the record, because a sync does not write them. The record lives in the sandbox database, so replacing that database outside a sync loses it and the next sync starts without one.
+- **No record yet.** On the first sync after upgrading, nothing tells a local install from an entry live removed. Everything already in the directory therefore counts as synced, including what a per-plugin selection leaves out of that run, and the sync removes what live does not have, as before. The start confirmation names the entries this removes. The exception is an entry live runs as a symlink. Live reports the top-level layout of both directories with the `plugins` action, a symlink never travels, and a real directory of that name on the sandbox is therefore a local build. This keeps a Newspack Manager branch build from the first sync.
+- **Stale record.** The same test overrides the record: a recorded name that live now runs as a symlink counts as a local build and is kept. A copy synced before live moved the package to a symlink is kept by the same rule, as it is, since the two cannot be told apart by name.
+- **Older live release.** A live site whose release predates the layout report describes its plugins only. Symlinked plugins are still recognised through the per-plugin `symlink` flag, a theme build gets no first-sync exception, and the job log says so.
+- **Activation.** Entries of the sandbox's `active_plugins` that belong to kept plugins are appended to the imported row before the swap. A sync that leaves `plugins/` alone decides the same set from live's reported layout when it refreshes the manifest, so a database-only sync and a full one agree. Nothing else is carried: a kept plugin's options come from live and its activation routine does not run again, and the active theme is always live's, because its mods and menu assignments point at rows the swap replaces.
+
 ### Safety runs before ordinary traffic sees the clone
 
 After DB swap (and through deferred file activation), an early-load 503 guard pauses the frontend. Tools → Sandbox Sync, its AJAX action, WP-Cron, and WP-CLI remain reachable. Checkable safety rules scrub secrets, neutralize integrations, block mail/HTTP, etc., before the guard drops at finalize — they do not rewrite users or editorial content. Safety defaults and selected live wp-config constants are written into a managed block on the realpath'd site `wp-config.php` (writable docroot); WP-CLI is only a fallback.
@@ -162,6 +173,7 @@ Traversal and import work checkpoints its lease, cancellation state, and progres
 | Option `sandbox_sync_job` | Active job |
 | Options `sandbox_sync_history`, `sandbox_sync_last_report`, `sandbox_sync_table_state` | History, last report, incremental table checksums |
 | Option `sandbox_sync_uploads_cursor` | Per-source, per-partition uploads generations applied by this sandbox |
+| Options `sandbox_sync_synced_plugins`, `sandbox_sync_synced_themes` | Top-level entries the last sync wrote to `plugins/` and `themes/`; any other entry found there is sandbox-only and kept |
 | `wp-content/.sandbox-sync-work/<job>/` | Manifests, batches, uploads quarantine |
 | `wp-content/.sandbox-sync-stage-<job>-{plugins,mu-plugins,themes}` | Code stages |
 | `wp-content/.sandbox-sync-bak-<job>-…` | Code rollback children (content-swap) |

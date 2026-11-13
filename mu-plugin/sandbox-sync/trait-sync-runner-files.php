@@ -1006,6 +1006,26 @@ trait Sync_Runner_Files {
 		$protected_symlinks = Files::symlink_paths( $target );
 		$in_place_uploads   = 'uploads' === $dir;
 
+		// plugins/ and themes/: entries this sync leaves alone, or may take
+		// whole from live, are set aside before anything is staged. They are
+		// never copied, hashed or moved, so work done in them while a long sync
+		// runs is not swapped out for a copy taken now. Telling them apart needs
+		// the names live holds as symlinks, hence the request up front, while
+		// there is still nothing to undo if it fails.
+		$kept_plan = null;
+		if ( isset( self::KEPT_DIRS[ $dir ] ) ) {
+			$live_tops = self::live_tops( $job );
+			if ( is_wp_error( $live_tops ) ) {
+				return $live_tops;
+			}
+			$checkpoint = self::checkpoint( $job );
+			if ( is_wp_error( $checkpoint ) ) {
+				return $checkpoint;
+			}
+			$kept_plan = self::plan_set_aside( $job, $dir, $target, $live_tops[ $dir ]['links'] );
+		}
+		$staged_tops = null === $kept_plan ? null : $kept_plan['staged_tops'];
+
 		// Stream the source manifest to a job-owned NDJSON file and merge it with
 		// the local iterator. Neither complete tree nor any path batch is stored
 		// in the WordPress job option.
@@ -1014,7 +1034,7 @@ trait Sync_Runner_Files {
 		if ( $clone_active ) {
 			$scanned_at = time();
 			$scanned    = 0;
-			foreach ( Files::walk( $target ) as $file ) {
+			foreach ( Files::walk( $target, false, '', $staged_tops ) as $file ) {
 				$clone_bytes += (int) $file['s'];
 				++$scanned;
 				if ( 0 === $scanned % 250 || time() - $scanned_at >= 30 ) {
@@ -1035,7 +1055,7 @@ trait Sync_Runner_Files {
 		}
 		$staged = $in_place_uploads
 			? self::prepare_uploads_in_place( $job )
-			: self::prepare_file_stage( $job, $dir, $clone_active, $clone_bytes );
+			: self::prepare_file_stage( $job, $dir, $clone_active, $clone_bytes, $staged_tops );
 		if ( is_wp_error( $staged ) ) {
 			return $staged;
 		}
@@ -1072,11 +1092,16 @@ trait Sync_Runner_Files {
 			}
 			return $checkpoint;
 		}
+		// Live's manifest settles which set-aside entries are kept. The closure
+		// below copies $job, so the kept set has to be in it by now.
+		$kept = null === $kept_plan ? array() : self::plan_kept_entries( $job, $dir, $manifest_file, $kept_plan );
 		$predicate   = function ( $file ) use ( $dir, $job, $protected_symlinks ) {
 			return self::file_in_scope( $file, $dir, $job, $protected_symlinks );
 		};
 		$remote_iter = Files::filter_iterator( Files::read_ndjson_manifest( $manifest_file ), $predicate );
-		$local_iter  = Files::filter_iterator( Files::walk( $target, true ), $predicate );
+		// Only staged entries are compared with live: an entry that was set
+		// aside has no copy in the stage, so one live delivers is fetched whole.
+		$local_iter  = Files::filter_iterator( Files::walk( $target, true, '', $staged_tops ), $predicate );
 
 		$plan         = (object) array(
 			'steps'       => array(),
@@ -1238,10 +1263,11 @@ trait Sync_Runner_Files {
 		}
 		Job::insert_steps( $job, $index, $plan->steps );
 
+		$kept_note = empty( $kept ) ? '' : sprintf( ' %d sandbox-only %s kept.', count( $kept ), 'plugins' === $dir ? 'plugin(s)' : 'theme(s)' );
 		if ( empty( $plan->steps ) && 0 === $plan->deleted ) {
 			self::discard_file_stage( $job, $dir );
 			return array(
-				'message' => sprintf( '%s/ is already up to date (%d source files streamed).', $dir, $remote_count ),
+				'message' => sprintf( '%s/ is already up to date (%d source files streamed).', $dir, $remote_count ) . $kept_note,
 				'skipped' => true,
 			);
 		}
@@ -1254,7 +1280,7 @@ trait Sync_Runner_Files {
 				$plan->fetch_count,
 				$transfer_steps,
 				$plan->deleted
-			),
+			) . $kept_note,
 		);
 	}
 
@@ -1547,7 +1573,11 @@ trait Sync_Runner_Files {
 		if ( file_exists( $backup ) && ! self::delete_recursive( $backup ) ) {
 			return new \WP_Error( 'backup_cleanup', "Cannot clear previous job backup {$backup}." );
 		}
-		$checkpoint = self::checkpoint( $job );
+		// Stored before the swap, so that a rollback steps around the same
+		// entries the swap left where they were.
+		$left                                = self::entries_left_in_place( $job, $dir, $target, $stage );
+		$job['working_dirs'][ $dir ]['left'] = $left['leave'];
+		$checkpoint                          = self::checkpoint( $job );
 		if ( is_wp_error( $checkpoint ) ) {
 			return $checkpoint;
 		}
@@ -1559,9 +1589,12 @@ trait Sync_Runner_Files {
 		// children instead; protected symlinks stay put.
 		$content_dirs = array( 'plugins', 'mu-plugins', 'themes' );
 		if ( in_array( $dir, $content_dirs, true ) ) {
-			$swapped = self::activate_dir_by_contents( $target, $stage, $backup );
+			$swapped = self::activate_dir_by_contents( $target, $stage, $backup, $left['leave'] );
 			if ( is_wp_error( $swapped ) ) {
 				return $swapped;
+			}
+			if ( ! empty( $left['late'] ) ) {
+				Job::log( $job, sprintf( '%s/: %d entr%s that appeared after this sync was planned stayed in place: %s.', $dir, count( $left['late'] ), 1 === count( $left['late'] ) ? 'y' : 'ies', implode( ', ', $left['late'] ) ) );
 			}
 			$job['working_dirs'][ $dir ]['activated']    = true;
 			$job['working_dirs'][ $dir ]['had_target']   = $had_target;
@@ -1597,30 +1630,83 @@ trait Sync_Runner_Files {
 	}
 
 	/**
+	 * Top-level entries the content swap leaves where they are: those the plan
+	 * settled (kept, protected, unselected) and those that appeared since. The
+	 * plan never judged a late entry, so it stays unless live delivers one of
+	 * that name. A staged symlink is no delivery, only a stand-in for a link
+	 * the sandbox had when the stage was cloned.
+	 *
+	 * @param array  $job    Job.
+	 * @param string $dir    Synced directory.
+	 * @param string $target Active directory.
+	 * @param string $stage  Staged directory.
+	 * @return array{leave:string[],late:string[]}
+	 */
+	private static function entries_left_in_place( $job, $dir, $target, $stage ) {
+		$settled = isset( $job[ 'in_place_' . $dir ] ) && is_array( $job[ 'in_place_' . $dir ] ) ? $job[ 'in_place_' . $dir ] : array();
+		$late    = array();
+		if ( isset( $job[ 'planned_' . $dir ] ) && is_array( $job[ 'planned_' . $dir ] ) ) {
+			$now = Files::top_level_listing( $target );
+			foreach ( array_merge( $now['dirs'], $now['files'] ) as $name ) {
+				if ( in_array( $name, $job[ 'planned_' . $dir ], true ) || in_array( $name, $settled, true ) ) {
+					continue;
+				}
+				$staged = $stage . '/' . $name;
+				if ( is_link( $staged ) || ! file_exists( $staged ) ) {
+					$late[] = $name;
+				}
+			}
+		}
+		return array(
+			'leave' => self::sorted_names( array_merge( $settled, $late ) ),
+			'late'  => self::sorted_names( $late ),
+		);
+	}
+
+	/**
 	 * Activates a staged code tree without renaming the target directory.
 	 * Moves every non-symlink child of $target into $backup, then every child
 	 * of $stage into $target. Existing symlinks in $target are left untouched
-	 * (and matching stage entries are discarded).
+	 * (and matching stage entries are discarded), and so is every entry named
+	 * in $leave: it is never moved, so it cannot be lost to a failed swap.
 	 *
+	 * @param string   $target Active directory.
+	 * @param string   $stage  Staged directory.
+	 * @param string   $backup Rollback directory, created here.
+	 * @param string[] $leave  Top-level entries of $target to leave where they are.
 	 * @return true|\WP_Error
 	 */
-	private static function activate_dir_by_contents( $target, $stage, $backup ) {
+	private static function activate_dir_by_contents( $target, $stage, $backup, $leave = array() ) {
 		if ( ! is_dir( $target ) && ! mkdir( $target, 0755, true ) ) {
 			return new \WP_Error( 'file_activate', "Cannot create target directory {$target}." );
 		}
 		if ( ! mkdir( $backup, 0755, true ) ) {
 			return new \WP_Error( 'file_activate', "Cannot create rollback directory {$backup}." );
 		}
-		$evacuated = self::move_dir_children( $target, $backup, array( 'skip_symlinks' => true ) );
+		$evacuated = self::move_dir_children(
+			$target,
+			$backup,
+			array(
+				'skip_symlinks' => true,
+				'skip_names'    => $leave,
+			)
+		);
 		if ( is_wp_error( $evacuated ) ) {
 			self::move_dir_children( $backup, $target, array( 'preserve_symlinks_in_to' => true ) );
 			self::delete_recursive( $backup );
 			return $evacuated;
 		}
-		$promoted = self::move_dir_children( $stage, $target, array( 'preserve_symlinks_in_to' => true ) );
+		$promoted = self::move_dir_children(
+			$stage,
+			$target,
+			array(
+				'preserve_symlinks_in_to' => true,
+				'preserve_names_in_to'    => $leave,
+			)
+		);
 		if ( is_wp_error( $promoted ) ) {
 			// Roll forward failed: put the previous children back.
-			self::delete_dir_children( $target, true );
+			self::delete_dir_children( $target, true, $leave );
 			self::move_dir_children( $backup, $target, array( 'preserve_symlinks_in_to' => true ) );
 			self::delete_recursive( $backup );
 			return $promoted;
@@ -1635,8 +1721,10 @@ trait Sync_Runner_Files {
 	 * Moves every top-level child from $from into $to.
 	 *
 	 * @param array $opts {
-	 *     @type bool $skip_symlinks           Leave symlinks in $from alone.
-	 *     @type bool $preserve_symlinks_in_to Skip names that are already symlinks in $to; remove the $from entry.
+	 *     @type bool     $skip_symlinks           Leave symlinks in $from alone.
+	 *     @type string[] $skip_names              Leave these entries of $from alone.
+	 *     @type bool     $preserve_symlinks_in_to Skip names that are already symlinks in $to; remove the $from entry.
+	 *     @type string[] $preserve_names_in_to    Same for these names when $to has an entry of that name.
 	 * }
 	 * @return true|\WP_Error
 	 */
@@ -1660,8 +1748,14 @@ trait Sync_Runner_Files {
 			if ( ! empty( $opts['skip_symlinks'] ) && is_link( $src ) ) {
 				continue;
 			}
-			if ( ! empty( $opts['preserve_symlinks_in_to'] ) && is_link( $dst ) ) {
-				// Keep the live symlink; drop the staged stand-in.
+			if ( ! empty( $opts['skip_names'] ) && in_array( $entry, (array) $opts['skip_names'], true ) ) {
+				continue;
+			}
+			$preserved = ! empty( $opts['preserve_names_in_to'] )
+				&& in_array( $entry, (array) $opts['preserve_names_in_to'], true )
+				&& ( file_exists( $dst ) || is_link( $dst ) );
+			if ( $preserved || ( ! empty( $opts['preserve_symlinks_in_to'] ) && is_link( $dst ) ) ) {
+				// Keep what the target has; drop the staged stand-in.
 				if ( is_link( $src ) || is_file( $src ) ) {
 					@unlink( $src );
 				} elseif ( is_dir( $src ) ) {
@@ -1683,9 +1777,12 @@ trait Sync_Runner_Files {
 	/**
 	 * Deletes every non-symlink top-level child of $dir (the directory itself stays).
 	 *
+	 * @param string   $dir           Directory to empty.
+	 * @param bool     $skip_symlinks Leave symlinks alone.
+	 * @param string[] $skip_names    Entries to leave alone: the ones a content swap never moved.
 	 * @return true|\WP_Error
 	 */
-	private static function delete_dir_children( $dir, $skip_symlinks = true ) {
+	private static function delete_dir_children( $dir, $skip_symlinks = true, $skip_names = array() ) {
 		if ( ! is_dir( $dir ) ) {
 			return true;
 		}
@@ -1699,6 +1796,9 @@ trait Sync_Runner_Files {
 			}
 			$path = $dir . '/' . $entry;
 			if ( $skip_symlinks && is_link( $path ) ) {
+				continue;
+			}
+			if ( in_array( $entry, (array) $skip_names, true ) ) {
 				continue;
 			}
 			if ( ! self::delete_recursive( $path ) ) {
@@ -1938,12 +2038,154 @@ trait Sync_Runner_Files {
 		return self::file_work_root( $job ) . '/stage/' . $dir;
 	}
 
+	/**
+	 * What live reports about the top level of its plugins/ and themes/
+	 * directories, asked once per job.
+	 *
+	 * @param array $job Job; caches the answer and logs when live cannot give it in full.
+	 * @return array|\WP_Error Per directory: 'real' (names, or null when live cannot say) and 'links'.
+	 */
+	private static function live_tops( &$job ) {
+		if ( isset( $job['live_tops'] ) && is_array( $job['live_tops'] ) ) {
+			return $job['live_tops'];
+		}
+		$response = Client::get_json( 'plugins' );
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+		$tops = array();
+		foreach ( array_keys( self::KEPT_DIRS ) as $dir ) {
+			$tops[ $dir ] = self::live_top_levels( $response, $dir );
+		}
+		if ( ! isset( $response['tops'] ) || ! is_array( $response['tops'] ) ) {
+			Job::log( $job, 'The live site runs a release that does not report the layout of its plugins/ and themes/ directories. A theme build over a package live runs as a symlink is therefore not recognised, and is only kept once a sync has recorded what it wrote.' );
+		}
+		$job['live_tops'] = $tops;
+		return $tops;
+	}
+
+	/**
+	 * Splits the top level of plugins/ or themes/ before anything is staged.
+	 * Entries the sync leaves alone, or may take whole from live, are set
+	 * aside: never copied into the stage, hashed or compared. The rest is
+	 * staged as before.
+	 *
+	 * @param array    $job        Job; remembers which entries existed when the plan was made.
+	 * @param string   $dir        'plugins' or 'themes'.
+	 * @param string   $target     Active directory on the sandbox.
+	 * @param string[] $live_links Names live holds as symlinks.
+	 * @return array Plan for plan_kept_entries(); 'staged_tops' lists what to clone and compare.
+	 */
+	private static function plan_set_aside( &$job, $dir, $target, $live_links ) {
+		$listing    = Files::top_level_listing( $target );
+		$planned    = self::sorted_names( array_merge( $listing['dirs'], $listing['files'] ) );
+		$candidates = self::kept_candidates( $dir, $listing );
+		$record     = get_option( self::KEPT_DIRS[ $dir ] );
+		$record     = is_array( $record ) ? self::sorted_names( $record ) : null;
+		$protected  = 'plugins' === $dir ? self::PROTECTED_PLUGINS : array();
+		$selection  = 'plugins' === $dir && isset( $job['options']['plugins'] ) && is_array( $job['options']['plugins'] ) ? $job['options']['plugins'] : null;
+
+		// What live delivers is not known yet. An entry is set aside when it
+		// would be kept should live turn out not to deliver it.
+		$set_aside = self::kept_top_level_names( $candidates, array(), $record, $live_links, $protected );
+		// Settled without live's answer: protected entries and, under a
+		// per-plugin selection, everything the selection leaves out.
+		$settled = self::sorted_names(
+			array_merge(
+				array_intersect( $planned, $protected ),
+				is_array( $selection ) ? array_diff( $planned, $selection ) : array()
+			)
+		);
+
+		$job[ 'planned_' . $dir ] = $planned;
+		return array(
+			'candidates'  => $candidates,
+			'record'      => $record,
+			'selection'   => $selection,
+			'protected'   => $protected,
+			'live_links'  => self::sorted_names( $live_links ),
+			'local_links' => $listing['links'],
+			'set_aside'   => $set_aside,
+			'settled'     => $settled,
+			'staged_tops' => self::sorted_names( array_diff( array_merge( $planned, $listing['links'] ), $set_aside, $settled ) ),
+		);
+	}
+
+	/**
+	 * Settles, once live's manifest is in, which set-aside entries this sync
+	 * keeps and what the record will hold when the sync is final. Runs before
+	 * the trees are compared, because the scope predicate reads the kept set
+	 * from the job. The caller's next checkpoint persists the job: saving it
+	 * here would bypass the lease check that fences a superseded worker.
+	 *
+	 * @param array  $job           Job; updated and logged to.
+	 * @param string $dir           'plugins' or 'themes'.
+	 * @param string $manifest_file Live's file manifest for $dir (NDJSON).
+	 * @param array  $plan          Result of plan_set_aside().
+	 * @return string[] Kept top-level names.
+	 */
+	private static function plan_kept_entries( &$job, $dir, $manifest_file, $plan ) {
+		$remote = Files::top_level_names( Files::read_ndjson_manifest( $manifest_file ) );
+		$kept   = self::kept_top_level_names( $plan['candidates'], $remote, $plan['record'], $plan['live_links'], $plan['protected'] );
+		$kind   = 'plugins' === $dir ? 'plugin(s)' : 'theme(s)';
+
+		$job[ 'kept_' . $dir ]     = $kept;
+		$job[ 'in_place_' . $dir ] = self::sorted_names( array_merge( $kept, $plan['settled'] ) );
+		// Without a record, everything already here counts as synced: the
+		// assumption every sync made before records existed.
+		$job[ 'synced_' . $dir . '_next' ] = self::next_synced_record(
+			$remote,
+			null !== $plan['record'] ? $plan['record'] : array_diff( $plan['candidates'], $kept ),
+			$plan['selection'],
+			$plan['local_links']
+		);
+
+		if ( null === $plan['record'] ) {
+			Job::log( $job, sprintf( '%s/: no record yet of what earlier syncs wrote here, so everything already in it counts as synced from live: what live does not have is removed, as before. Entries added on this sandbox after this sync are kept.', $dir ) );
+		}
+		if ( ! empty( $kept ) ) {
+			Job::log( $job, sprintf( 'Keeping %d sandbox-only %s: %s.', count( $kept ), $kind, implode( ', ', $kept ) ) );
+		}
+		// Set aside, delivered by live after all, and in scope of this run.
+		$replaced = self::sorted_names( array_diff( $plan['set_aside'], $kept, $plan['settled'] ) );
+		if ( ! empty( $replaced ) ) {
+			Job::log( $job, sprintf( '%s/: live now delivers %s, which this sandbox had on its own. Live\'s copy replaces the sandbox\'s.', $dir, implode( ', ', $replaced ) ) );
+		}
+		return $kept;
+	}
+
+	/**
+	 * Decides, for a sync that does not plan plugins/, which plugins keep
+	 * their activation across the database swap: the same rule as the plan
+	 * step, with live's reported layout standing in for its file manifest.
+	 *
+	 * @param array $job       Job; updated.
+	 * @param array $live_tops Result of live_tops().
+	 */
+	private static function plan_activation_carry( &$job, $live_tops ) {
+		$live   = isset( $live_tops['plugins'] ) && is_array( $live_tops['plugins'] ) ? $live_tops['plugins'] : array();
+		$record = get_option( self::OPT_SYNCED_PLUGINS );
+
+		$job['activation_kept'] = self::kept_top_level_names(
+			self::kept_candidates( 'plugins', Files::top_level_listing( WP_CONTENT_DIR . '/plugins' ) ),
+			isset( $live['real'] ) && is_array( $live['real'] ) ? $live['real'] : array(),
+			is_array( $record ) ? $record : null,
+			isset( $live['links'] ) ? $live['links'] : array(),
+			self::PROTECTED_PLUGINS
+		);
+	}
+
 	private static function file_in_scope( $file, $dir, $job, $protected_symlinks ) {
 		$path = isset( $file['p'] ) ? $file['p'] : '';
 		foreach ( $protected_symlinks as $prefix ) {
 			if ( $path === $prefix || 0 === strpos( $path, rtrim( $prefix, '/' ) . '/' ) ) {
 				return false;
 			}
+		}
+		// Sandbox-only entries this job keeps are invisible to the fetch plan,
+		// the deletion pass and stage validation alike, selection or not.
+		if ( isset( self::KEPT_DIRS[ $dir ] ) && ! empty( $job[ 'kept_' . $dir ] ) && in_array( strtok( $path, '/' ), (array) $job[ 'kept_' . $dir ], true ) ) {
+			return false;
 		}
 		if ( 'plugins' === $dir ) {
 			$top = strtok( $path, '/' );
@@ -2146,7 +2388,7 @@ trait Sync_Runner_Files {
 	 *
 	 * @return string|\WP_Error Stage path.
 	 */
-	private static function prepare_file_stage( &$job, $dir, $clone_active, $clone_bytes = 0 ) {
+	private static function prepare_file_stage( &$job, $dir, $clone_active, $clone_bytes = 0, $only_tops = null ) {
 		$job_id = isset( $job['id'] ) ? preg_replace( '/[^a-z0-9]/i', '', (string) $job['id'] ) : 'unknown';
 		$target = WP_CONTENT_DIR . '/' . $dir;
 		$stage  = WP_CONTENT_DIR . '/.sandbox-sync-stage-' . $job_id . '-' . $dir;
@@ -2181,7 +2423,7 @@ trait Sync_Runner_Files {
 
 		if ( $clone_active ) {
 			$clone_state = null;
-			$cloned      = self::clone_tree_for_stage( $target, $stage, $job, $clone_state );
+			$cloned      = self::clone_tree_for_stage( $target, $stage, $job, $clone_state, $only_tops );
 			if ( is_wp_error( $cloned ) ) {
 				self::delete_recursive( $stage );
 				return $cloned;
@@ -2311,8 +2553,17 @@ trait Sync_Runner_Files {
 		return $restored;
 	}
 
-	/** @return true|\WP_Error */
-	private static function clone_tree_for_stage( $source, $dest, &$job, &$state ) {
+	/**
+	 * Copies a tree into the stage, symlinks recreated as symlinks.
+	 *
+	 * @param string        $source Directory to copy.
+	 * @param string        $dest   Existing directory to copy into.
+	 * @param array         $job    Job, for checkpoints.
+	 * @param object|null   $state  Progress shared across the recursion.
+	 * @param string[]|null $only   Top-level entries of $source to copy, or null for all.
+	 * @return true|\WP_Error
+	 */
+	private static function clone_tree_for_stage( $source, $dest, &$job, &$state, $only = null ) {
 		if ( ! is_dir( $source ) ) {
 			return true;
 		}
@@ -2328,6 +2579,9 @@ trait Sync_Runner_Files {
 		}
 		foreach ( $entries as $entry ) {
 			if ( '.' === $entry || '..' === $entry ) {
+				continue;
+			}
+			if ( is_array( $only ) && ! in_array( $entry, $only, true ) ) {
 				continue;
 			}
 			++$state->count;
@@ -2422,7 +2676,9 @@ trait Sync_Runner_Files {
 				if ( ! empty( $state['content_swap'] ) ) {
 					// Host forbids renaming the target directory; restore by
 					// swapping children back. Never delete_recursive($target).
-					self::delete_dir_children( $state['target'], true );
+					// Entries the swap left in place were never moved to the
+					// backup, so deleting them here would destroy them.
+					self::delete_dir_children( $state['target'], true, isset( $state['left'] ) ? (array) $state['left'] : array() );
 					if ( ! empty( $state['had_target'] ) && is_dir( $state['backup'] ) ) {
 						self::move_dir_children( $state['backup'], $state['target'], array( 'preserve_symlinks_in_to' => true ) );
 					}

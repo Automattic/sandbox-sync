@@ -77,6 +77,7 @@ jobs:
           printf 'unchanged across incremental syncs\n' >/tmp/source/wp-content/uploads/fixture/unchanged.txt
           chmod 0640 /tmp/source/wp-content/uploads/fixture/unchanged.txt
           touch -d @1234567890 /tmp/source/wp-content/uploads/fixture/unchanged.txt
+          bash "$GITHUB_WORKSPACE/fixtures/kept-entries.sh" seed /tmp/source /tmp/sandbox
       - name: Start source and sandbox HTTP servers
         run: |
           php -S 127.0.0.1:8081 -t /tmp/source >/tmp/source-http.log 2>&1 &
@@ -113,8 +114,10 @@ jobs:
           test -z "$(find /tmp/source/wp-content -maxdepth 1 -name '.sandbox-sync-transfer-*.php' -print -quit)"
           curl -fsS http://127.0.0.1:8081 >/dev/null
           wp sandbox-sync history --path=/tmp/sandbox --format=json | php -r '$v=json_decode(stream_get_contents(STDIN), true); exit(is_array($v) && count($v) ? 0 : 1);'
+          bash "$GITHUB_WORKSPACE/fixtures/kept-entries.sh" verify-first /tmp/source /tmp/sandbox
       - name: Verify a second incremental database and media sync
         run: |
+          bash "$GITHUB_WORKSPACE/fixtures/kept-entries.sh" change /tmp/source /tmp/sandbox
           printf 'new on second sync\n' >/tmp/source/wp-content/uploads/fixture/new.txt
           printf 'sandbox-only stale upload\n' >/tmp/sandbox/wp-content/uploads/fixture/stale.txt
           wp post create --path=/tmp/source --post_type=post --post_status=publish --post_title='Second-sync sentinel' --quiet
@@ -127,6 +130,11 @@ jobs:
           test "$(stat -c %a /tmp/sandbox/wp-content/uploads/fixture/unchanged.txt)" = '640'
           test "$(stat -c %Y /tmp/sandbox/wp-content/uploads/fixture/unchanged.txt)" = '1234567890'
           test -z "$(find /tmp/sandbox/wp-content/.sandbox-sync-work -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)"
+          bash "$GITHUB_WORKSPACE/fixtures/kept-entries.sh" verify-kept /tmp/source /tmp/sandbox
+      - name: Verify a full sync keeps sandbox-only plugins and themes
+        run: |
+          wp sandbox-sync run --path=/tmp/sandbox --user=admin --constants=SANDBOX_SYNC_TEST --full --skip-uploads --yes
+          bash "$GITHUB_WORKSPACE/fixtures/kept-entries.sh" verify-kept /tmp/source /tmp/sandbox
       - name: Upload diagnostics on failure
         if: failure()
         uses: actions/upload-artifact@v7

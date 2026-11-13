@@ -170,3 +170,9 @@ ss_assert_same( 'legacy-cleartext', $conn['token'], 'legacy cleartext token rema
 ss_assert( is_array( get_option( Auth::OPT_TOKEN ) ), 'legacy cleartext token is replaced by a sealed value' );
 Auth::disconnect();
 ss_assert_same( null, Auth::get_connection(), 'disconnect clears the connection' );
+
+ss_test_section( 'Auth: sandbox state that survives the database swap' );
+
+$preserved_names = Auth::preserved_option_names();
+ss_assert( in_array( \SandboxSync\Sync_Runner::OPT_SYNCED_PLUGINS, $preserved_names, true ), 'the record of synced plugins is carried into the swapped database' );
+ss_assert( in_array( \SandboxSync\Sync_Runner::OPT_SYNCED_THEMES, $preserved_names, true ), 'the record of synced themes is carried into the swapped database' );

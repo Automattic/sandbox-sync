@@ -90,8 +90,16 @@ class Files {
 	/**
 	 * Memory-bounded, path-sorted file iterator used by streamed manifests and
 	 * merge-diffing. Symlinked entries are never followed.
+	 *
+	 * @param string        $base_dir    Directory to walk.
+	 * @param bool          $with_hashes Whether to hash each file.
+	 * @param string        $prefix      Relative path of $base_dir, used by the recursion.
+	 * @param string[]|null $only_tops   Top-level entries to walk, or null for all. Entries
+	 *                                   a sync leaves alone are skipped whole, unread. The
+	 *                                   recursion does not pass it on, so it never applies
+	 *                                   below the top level.
 	 */
-	public static function walk( $base_dir, $with_hashes = false, $prefix = '' ) {
+	public static function walk( $base_dir, $with_hashes = false, $prefix = '', $only_tops = null ) {
 		if ( ! is_dir( $base_dir ) || is_link( $base_dir ) ) {
 			return;
 		}
@@ -102,6 +110,9 @@ class Files {
 		sort( $entries, SORT_STRING );
 		foreach ( $entries as $entry ) {
 			if ( '.' === $entry || '..' === $entry ) {
+				continue;
+			}
+			if ( is_array( $only_tops ) && ! in_array( $entry, $only_tops, true ) ) {
 				continue;
 			}
 			$full = $base_dir . '/' . $entry;
@@ -414,6 +425,69 @@ class Files {
 				}
 			)
 		);
+	}
+
+	/**
+	 * Top-level layout of a code directory, by entry name. Both sites read it
+	 * to tell what a sync delivered apart from what only the sandbox has: a
+	 * symlink never travels, so its name must not count as a synced entry.
+	 *
+	 * @param string $base_dir Directory to list. Never followed when it is a symlink.
+	 * @return array{dirs:string[],files:string[],links:string[]} Sorted names.
+	 */
+	public static function top_level_listing( $base_dir ) {
+		$listing = array(
+			'dirs'  => array(),
+			'files' => array(),
+			'links' => array(),
+		);
+		if ( ! is_dir( $base_dir ) || is_link( $base_dir ) ) {
+			return $listing;
+		}
+		$entries = scandir( $base_dir );
+		if ( false === $entries ) {
+			return $listing;
+		}
+		sort( $entries, SORT_STRING );
+		foreach ( $entries as $entry ) {
+			if ( '.' === $entry || '..' === $entry ) {
+				continue;
+			}
+			$full = $base_dir . '/' . $entry;
+			if ( is_link( $full ) ) {
+				$listing['links'][] = $entry;
+			} elseif ( is_dir( $full ) ) {
+				$listing['dirs'][] = $entry;
+			} elseif ( is_file( $full ) ) {
+				$listing['files'][] = $entry;
+			}
+		}
+		return $listing;
+	}
+
+	/**
+	 * Unique top-level path segments of a file manifest, sorted.
+	 *
+	 * @param iterable $files Entries with a 'p' relative path.
+	 * @return string[]
+	 */
+	public static function top_level_names( $files ) {
+		$tops = array();
+		$last = null;
+		foreach ( $files as $file ) {
+			if ( ! isset( $file['p'] ) || ! is_string( $file['p'] ) || '' === $file['p'] ) {
+				continue;
+			}
+			$top = (string) strtok( $file['p'], '/' );
+			// Manifests are path-sorted, so one comparison drops nearly every repeat.
+			if ( $top !== $last ) {
+				$tops[] = $top;
+				$last   = $top;
+			}
+		}
+		$tops = array_values( array_unique( $tops ) );
+		sort( $tops, SORT_STRING );
+		return $tops;
 	}
 
 	/**

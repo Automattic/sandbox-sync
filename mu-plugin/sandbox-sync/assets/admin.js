@@ -239,6 +239,8 @@ function loadSourceMeta() {
 		}
 
 		renderUploads( res.data.uploads );
+		keptPreview = res.data.kept || keptPreview;
+		firstSyncRemovals = res.data.first_sync_removals || firstSyncRemovals;
 
 		const plugins = res.data.plugins || [];
 		pluginsList.innerHTML = plugins.length ? plugins.map( ( p ) => {
@@ -265,6 +267,23 @@ function loadSourceMeta() {
 	} ).catch( ( err ) => {
 		pluginsList.textContent = 'Could not load from live: ' + err.message;
 	} );
+}
+
+// Plugins and themes only this sandbox has: what the next sync leaves in
+// place, and what it still removes while no earlier sync is recorded.
+// Previewed with the source meta, so empty until that request answers.
+let keptPreview = { plugins: [], themes: [] };
+let firstSyncRemovals = { plugins: [], themes: [] };
+
+function keptSummary( dirs, pluginSelection ) {
+	const names = ( list, dir ) => ( dirs.includes( dir ) && Array.isArray( list[ dir ] ) ? list[ dir ] : [] );
+	return [ 'plugins', 'themes' ].map( ( dir ) => {
+		const kept = names( keptPreview, dir );
+		// A per-plugin selection leaves every sandbox-only plugin out of the run.
+		const removed = 'plugins' === dir && pluginSelection ? [] : names( firstSyncRemovals, dir );
+		return ( kept.length ? '• sandbox-only ' + dir + ' kept: ' + kept.join( ', ' ) + '\n' : '' )
+			+ ( removed.length ? '• sandbox-only ' + dir + ' removed (no earlier sync recorded): ' + removed.join( ', ' ) + '\n' : '' );
+	} ).join( '' );
 }
 
 document.querySelectorAll( '.sbs-check-all, .sbs-check-none' ).forEach( ( btn ) =>
@@ -451,6 +470,7 @@ onClick( 'sbs-start', () => {
 		+ ( options.db ? '• the live site stays fully online during the export; busy tables are captured as of their own export moment\n' : '' )
 		+ ( dirs.length ? '• files: ' + dirs.join( ', ' ) + '\n' : '' )
 		+ ( options.plugins ? '• plugins limited to: ' + options.plugins.length + ' selected\n' : '' )
+		+ keptSummary( dirs, options.plugins )
 		+ ( options.uploads_scope ? '• uploads limited to: ' + ( options.uploads_scope.length ? options.uploads_scope.join( ', ' ) : 'NOTHING' ) + '\n' : '' )
 		+ ( options.uploads_full_audit ? '• uploads: rescan every selected folder; only changed payloads are hashed\n' : '• uploads: fast dirty-month tracking for WordPress-managed changes\n' )
 		+ ( options.uploads_adopt ? '• uploads: never-synced folders adopt files already on this sandbox; nothing is cleared, only differences are downloaded\n' : '' )
