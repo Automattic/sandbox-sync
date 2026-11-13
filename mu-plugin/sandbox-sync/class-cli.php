@@ -285,6 +285,10 @@ class CLI {
 	 * Lists plugins installed on the live site (run on the sandbox), for
 	 * use with `run --plugins=<tops>`.
 	 *
+	 * A plugin whose version on this sandbox differs from live shows that
+	 * version in an extra "sandbox v…" column. A plugin that is a symlink
+	 * here is marked as kept, with its release channel when its link names one.
+	 *
 	 * @subcommand source-plugins
 	 */
 	public function source_plugins() {
@@ -292,17 +296,10 @@ class CLI {
 		if ( is_wp_error( $response ) ) {
 			\WP_CLI::error( $response->get_error_message() );
 		}
-		foreach ( (array) $response['plugins'] as $plugin ) {
-			\WP_CLI::log(
-				sprintf(
-					'%-32s %-10s %s (%s)%s',
-					$plugin['top'],
-					'v' . $plugin['version'],
-					$plugin['name'],
-					$plugin['active'] ? 'active' : 'inactive',
-					! empty( $plugin['symlink'] ) ? ' [symlinked — not synced]' : ''
-				)
-			);
+		$compared = Plugin_Compare::compare( (array) ( $response['plugins'] ?? array() ), Plugin_Compare::read_local() );
+		$differs  = in_array( true, array_column( $compared['rows'], 'differs' ), true );
+		foreach ( $compared['rows'] as $plugin ) {
+			\WP_CLI::log( Plugin_Compare::cli_line( $plugin, $differs ) );
 		}
 	}
 
@@ -419,6 +416,9 @@ class CLI {
 					Job::format_duration( (int) ( $report['duration_s'] ?? 0 ) )
 				)
 			);
+			if ( isset( $report['plugin_changes'] ) && is_array( $report['plugin_changes'] ) ) {
+				\WP_CLI::log( '              plugins: ' . Plugin_Compare::describe( $report['plugin_changes'], Job::S_DONE ) . '.' );
+			}
 		}
 	}
 
@@ -460,6 +460,9 @@ class CLI {
 					$log_note
 				)
 			);
+			if ( isset( $report['plugin_changes'] ) && is_array( $report['plugin_changes'] ) ) {
+				\WP_CLI::log( '    plugins: ' . Plugin_Compare::describe( $report['plugin_changes'], (string) ( $report['status'] ?? '' ) ) . '.' );
+			}
 		}
 	}
 

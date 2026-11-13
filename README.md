@@ -73,6 +73,7 @@ Default-on rules scrub secrets, newsletter/Jetpack credentials, risky plugins, m
   - Incremental; run in background.
   - Adopt existing uploads / rescan all uploads (advanced).
   - Plugin picker, uploads year/month scopes, wp-config constants to replicate.
+  - The plugin picker shows the sandbox version next to the live version where they differ, marks plugins that are symlinks on the sandbox as kept (the live copy is skipped), and names the release channel those links point to: Release, Alpha, Canary, or a branch build. The start confirmation and the sync history carry the counts.
   - Safety rule checkboxes.
 - Start sync (with confirmation), live progress + step log, Cancel.
 - Sync history with per-job log **View**.
@@ -100,7 +101,7 @@ Run on the appropriate site (`--path=`). Destructive `run` asks for confirmation
 | `revoke` / `revoke <hash-prefix>` | Source | Revoke all or one sandbox |
 | `source-stop` | Source | Emergency abort of active transfers |
 | `safety-rules` | Either | List safety rules, defaults, and what each changes |
-| `source-plugins` | Sandbox | List live plugins for `--plugins=` |
+| `source-plugins` | Sandbox | List live plugins for `--plugins=`, with the sandbox version where it differs and plugins kept as symlinks |
 | `source-constants` | Sandbox | List replicable wp-config names |
 
 **`run` flags:** `--db-only`, `--files-only`, `--skip-uploads`, `--full`, `--audit-uploads`, `--adopt-uploads`, `--exclude-tables=`, `--schema-only-tables=`, `--plugins=`, `--uploads=`, `--constants=`, `--safety=`, `--no-safety`, `--dry-run`, `--yes`, `--user=<login>` (preserve that admin across DB swap).

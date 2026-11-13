@@ -123,9 +123,14 @@ class Admin_Page {
 				if ( is_wp_error( $uploads ) ) {
 					wp_send_json_error( array( 'message' => $uploads->get_error_message() ) );
 				}
+				// Live's rows gain this sandbox's version, symlink and release
+				// channel, so the picker shows what a sync would change or keep.
+				$compared           = Plugin_Compare::compare( (array) ( $plugins['plugins'] ?? array() ), Plugin_Compare::read_local() );
+				$plugins['plugins'] = $compared['rows'];
 				wp_send_json_success(
 					array(
 						'plugins'   => $plugins['plugins'],
+						'channel'   => $compared['channel'],
 						'constants' => $constants['constants'],
 						'uploads'   => $uploads,
 					)
@@ -448,7 +453,7 @@ class Admin_Page {
 						<details>
 							<summary><strong>Sync history (last <?php echo (int) count( $history ); ?>)</strong></summary>
 							<table class="widefat striped" style="margin-top:8px;">
-								<thead><tr><th>Finished</th><th>Job</th><th>Status</th><th>Source</th><th>Tables</th><th>Dirs</th><th>Duration</th><th>Log</th></tr></thead>
+								<thead><tr><th>Finished</th><th>Job</th><th>Status</th><th>Source</th><th>Tables</th><th>Dirs</th><th>Duration</th><th>Plugins</th><th>Log</th></tr></thead>
 								<tbody>
 								<?php foreach ( $history as $report ) : ?>
 									<?php
@@ -464,6 +469,7 @@ class Admin_Page {
 										<td><?php echo (int) ( $report['tables_imported'] ?? 0 ); ?> imported / <?php echo (int) ( $report['tables_skipped'] ?? 0 ); ?> skipped</td>
 										<td><?php echo esc_html( implode( ', ', (array) ( $report['dirs'] ?? array() ) ) ); ?></td>
 										<td title="<?php echo esc_attr( $duration_s . 's' ); ?>"><?php echo esc_html( Job::format_duration( $duration_s ) ); ?></td>
+										<td><?php echo isset( $report['plugin_changes'] ) && is_array( $report['plugin_changes'] ) ? esc_html( Plugin_Compare::describe( $report['plugin_changes'], (string) ( $report['status'] ?? '' ) ) ) : '<span class="description">—</span>'; ?></td>
 										<td>
 											<?php if ( $has_log ) : ?>
 												<button type="button" class="button button-small sbs-view-log" data-job-id="<?php echo esc_attr( $report_id ); ?>">View</button>

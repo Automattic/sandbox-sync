@@ -925,6 +925,7 @@ class Sync_Runner {
 		}
 		self::register_working_tables( $job, $working_tables );
 		Job::insert_steps( $job, $index, $steps );
+		self::record_plugin_changes( $job );
 
 		$total_size_mb = round( array_sum( wp_list_pluck( $manifest['tables'], 'size' ) ) / 1048576, 1 );
 		$transport     = isset( $job['preflight']['transport'] ) ? $job['preflight']['transport'] : array();
@@ -940,6 +941,38 @@ class Sync_Runner {
 				$tls
 			),
 		);
+	}
+
+	/**
+	 * Records, before anything is swapped, how many plugins this job moves to
+	 * another version and how many it keeps as symlinks. The counts go to the
+	 * job log, the report and the history; they decide nothing. When live's
+	 * plugin list cannot be read the job simply carries none.
+	 *
+	 * Runs once the manifest is validated and the plan inserted, on a single
+	 * short read of live's plugin list, and must not checkpoint or save: a
+	 * replayed manifest step would then insert the plan twice.
+	 *
+	 * @param array $job By reference.
+	 */
+	private static function record_plugin_changes( &$job ) {
+		if ( ! in_array( 'plugins', (array) $job['options']['dirs'], true ) || ! in_array( 'plugins', (array) $job['manifest']['dirs'], true ) ) {
+			return;
+		}
+		$live_plugins = Client::get_source_plugins();
+		$summary      = Plugin_Compare::job_summary( $live_plugins, Plugin_Compare::read_local(), $job['options']['plugins'] );
+		if ( null === $summary ) {
+			Job::log(
+				$job,
+				sprintf(
+					'Plugins: the live plugin list could not be read (%s), so this job reports no version comparison. The sync itself is not affected.',
+					is_wp_error( $live_plugins ) ? $live_plugins->get_error_message() : 'unexpected response'
+				)
+			);
+			return;
+		}
+		$job['plugin_changes'] = $summary;
+		Job::log( $job, 'Plugins: ' . Plugin_Compare::describe( $summary, $job['status'] ) . '.' );
 	}
 
 	private static function step_safety( &$job ) {
@@ -1063,6 +1096,10 @@ class Sync_Runner {
 			'error_info'      => isset( $job['error_info'] ) && is_array( $job['error_info'] ) ? $job['error_info'] : null,
 			'has_log'         => null !== Job::log_path( $job_id ) && is_file( (string) Job::log_path( $job_id ) ),
 		);
+		// Present only when the manifest step compared the plugin lists.
+		if ( isset( $job['plugin_changes'] ) && is_array( $job['plugin_changes'] ) ) {
+			$report['plugin_changes'] = $job['plugin_changes'];
+		}
 		if ( 'done' === $status ) {
 			update_option( self::OPT_LAST_REPORT, $report, false );
 		}
