@@ -47,6 +47,9 @@ One must-use plugin is installed on **both** the live site and each sandbox. The
 - Code dirs: staged, hashed, then activated (content-swap on hosts that cannot rename `plugins/` etc.).
 - Uploads: in-place + quarantine; year-streamed first baseline; per-partition cursor; adopt and full-audit modes.
 - Symlinks never followed, synced, overwritten, or deleted.
+- Plugins and themes that only the sandbox has are kept. An entry of `plugins/` or `themes/` that is neither on live nor written by an earlier sync is left where it is, not copied or moved, so work done in it while a sync runs is not lost. A kept plugin that was active stays active. An entry live removes after a sync is still removed from the sandbox.
+- The first sync after upgrading has no record of earlier syncs yet, so it still removes what live does not have. The start confirmation names what that is.
+- A Newspack Manager branch build is kept too, from the first sync, with its `<slug>--symlink` backup beside it: live runs that package as a symlink, so the real directory on the sandbox can only be a local build. For a theme build this needs live to run this release as well.
 
 ### Sandbox safety (post-activation)
 
@@ -210,5 +213,8 @@ docs/               Architecture, compatibility, threat model, recovery
 - Fast uploads trusts WordPress media hooks; use upload rescan/audit after raw SFTP writes.
 - Posts row-delta planning scans complete lightweight post indexes and clones local `posts`/`postmeta` tables; it reduces network transfer, not destination database copy/binlog work. Changes that bypass normal post-modified semantics can require a full sync/audit.
 - Platform egress/snapshots are out of band; WordPress hooks cannot replace them.
+- A kept sandbox-only plugin or theme keeps its files, and a plugin its activation. Its settings come from live with the database and its activation routine does not run again, so a plugin that sets up roles, schedules or rewrite rules when activated may need to be deactivated and activated once. The active theme is always live's. `mu-plugins/` keeps nothing.
+- A plugin the sandbox holds as a symlink keeps its files, but takes live's activation state.
+- The record of what a sync wrote lives in the sandbox database. If that database is replaced outside a sync, the next sync behaves like a first one.
 
 Details and recovery procedures: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/RECOVERY.md](docs/RECOVERY.md).

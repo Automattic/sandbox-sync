@@ -564,3 +564,86 @@ ss_assert_same( null, $discard_guard->invoke( null, $guard_root . '/missing-stag
 @unlink( $guard_root . '/outside-index.php' );
 @rmdir( $guard_stage );
 @rmdir( $guard_root );
+
+ss_test_section( 'Files: top-level layout of a code directory' );
+
+$tops_root = sys_get_temp_dir() . '/ss-tops-' . bin2hex( random_bytes( 4 ) );
+mkdir( $tops_root . '/plugins/beta', 0755, true );
+mkdir( $tops_root . '/plugins/alpha', 0755, true );
+mkdir( $tops_root . '/plugins/123', 0755, true );
+mkdir( $tops_root . '/elsewhere', 0755, true );
+file_put_contents( $tops_root . '/plugins/hello.php', '<?php' );
+file_put_contents( $tops_root . '/plugins/.DS_Store', 'x' );
+symlink( $tops_root . '/elsewhere', $tops_root . '/plugins/linked' );
+symlink( $tops_root . '/plugins/hello.php', $tops_root . '/plugins/linked-file.php' );
+symlink( $tops_root . '/plugins', $tops_root . '/plugins-link' );
+
+ss_assert_same(
+	array(
+		'dirs'  => array( '123', 'alpha', 'beta' ),
+		'files' => array( '.DS_Store', 'hello.php' ),
+		'links' => array( 'linked', 'linked-file.php' ),
+	),
+	Files::top_level_listing( $tops_root . '/plugins' ),
+	'listing separates real directories, regular files and symlinks, each sorted by name'
+);
+$empty_listing = array(
+	'dirs'  => array(),
+	'files' => array(),
+	'links' => array(),
+);
+ss_assert_same( $empty_listing, Files::top_level_listing( $tops_root . '/missing' ), 'a missing directory lists nothing' );
+ss_assert_same( $empty_listing, Files::top_level_listing( $tops_root . '/plugins-link' ), 'a symlinked base directory is never followed' );
+ss_test_rmrf( $tops_root );
+
+ss_assert_same(
+	array( '123', 'akismet', 'classic-widgets', 'hello.php', 'stop-emails' ),
+	Files::top_level_names(
+		new ArrayIterator(
+			array_merge(
+				$plugin_files,
+				array(
+					array( 's' => 1 ),
+					array(
+						'p' => '123/x.php',
+						's' => 1,
+						'm' => 1,
+					),
+					array(
+						'p' => 'akismet/late.php',
+						's' => 1,
+						'm' => 1,
+					),
+				)
+			)
+		)
+	),
+	'manifest tops are unique and sorted, numeric names stay strings, entries without a path are skipped'
+);
+
+ss_test_section( 'Files: walking only some top-level entries' );
+
+$only_root = sys_get_temp_dir() . '/ss-walk-only-' . bin2hex( random_bytes( 4 ) );
+mkdir( $only_root . '/akismet/inc', 0755, true );
+mkdir( $only_root . '/dev-tool', 0755, true );
+file_put_contents( $only_root . '/akismet/akismet.php', '<?php' );
+file_put_contents( $only_root . '/akismet/inc/dev-tool', 'nested name, not a top-level entry' );
+file_put_contents( $only_root . '/dev-tool/dev-tool.php', '<?php' );
+file_put_contents( $only_root . '/hello.php', '<?php' );
+
+ss_assert_same(
+	array( 'akismet/akismet.php', 'akismet/inc/dev-tool', 'dev-tool/dev-tool.php', 'hello.php' ),
+	array_column( iterator_to_array( Files::walk( $only_root ), false ), 'p' ),
+	'without a restriction every file is walked'
+);
+ss_assert_same(
+	array( 'akismet/akismet.php', 'akismet/inc/dev-tool', 'hello.php' ),
+	array_column( iterator_to_array( Files::walk( $only_root, false, '', array( 'akismet', 'hello.php', 'missing' ) ), false ), 'p' ),
+	'a restriction applies to top-level entries only; a nested entry of the same name is still walked'
+);
+ss_assert_same(
+	array(),
+	array_column( iterator_to_array( Files::walk( $only_root, false, '', array() ), false ), 'p' ),
+	'an empty restriction walks nothing'
+);
+ss_test_rmrf( $only_root );

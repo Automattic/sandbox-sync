@@ -334,6 +334,9 @@ class Job {
 			'error'            => $job['error'],
 			'error_info'       => isset( $job['error_info'] ) && is_array( $job['error_info'] ) ? $job['error_info'] : null,
 			'cancel_requested' => self::is_cancel_requested( $job['id'] ),
+			// Sandbox-only entries this sync leaves in place (set by the plan steps).
+			'kept_plugins'     => isset( $job['kept_plugins'] ) && is_array( $job['kept_plugins'] ) ? array_values( $job['kept_plugins'] ) : array(),
+			'kept_themes'      => isset( $job['kept_themes'] ) && is_array( $job['kept_themes'] ) ? array_values( $job['kept_themes'] ) : array(),
 		);
 	}
 

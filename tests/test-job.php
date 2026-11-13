@@ -229,3 +229,19 @@ ss_assert_same( 1, Job::prune_log_files( array( 'abcdef012345' ) ), 'history ret
 ss_assert( is_file( Job::log_path( 'abcdef012345' ) ), 'kept job logs survive pruning' );
 ss_assert( ! is_file( Job::log_path( 'ffffffffffff' ) ), 'pruned job logs are deleted' );
 ss_test_rmrf( $log_dir );
+
+ss_test_section( 'Job: kept sandbox-only entries in the public state' );
+
+ss_test_reset_options();
+$kept_state_job                 = Job::create( array( 'dirs' => array( 'plugins', 'themes' ) ), 1, false );
+$kept_state                     = Job::public_state( $kept_state_job );
+ss_assert_same( array(), $kept_state['kept_plugins'], 'a job that kept nothing exposes an empty plugin list' );
+ss_assert_same( array(), $kept_state['kept_themes'], 'a job that kept nothing exposes an empty theme list' );
+$kept_state_job['kept_plugins'] = array( 'dev-tool', 'hello.php' );
+$kept_state_job['kept_themes']  = array( 'my-theme' );
+$kept_state                     = Job::public_state( $kept_state_job );
+ss_assert_same( array( 'dev-tool', 'hello.php' ), $kept_state['kept_plugins'], 'the public job state lists kept plugins' );
+ss_assert_same( array( 'my-theme' ), $kept_state['kept_themes'], 'the public job state lists kept themes' );
+Job::delete();
+ss_test_rmrf( Job::log_dir() );
+ss_test_reset_options();

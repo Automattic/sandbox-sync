@@ -128,6 +128,10 @@ class Admin_Page {
 						'plugins'   => $plugins['plugins'],
 						'constants' => $constants['constants'],
 						'uploads'   => $uploads,
+						// Sandbox-only plugins and themes a sync started now would keep,
+						// and those it would still remove while no sync is recorded.
+						'kept'                => Sync_Runner::preview_kept( $plugins ),
+						'first_sync_removals' => Sync_Runner::preview_first_sync_removals( $plugins ),
 					)
 				);
 				break;
@@ -353,7 +357,7 @@ class Admin_Page {
 							<details class="sbs-acc">
 								<summary>Plugins to sync <span class="sbs-acc-hint" id="sbs-plugins-hint">all</span></summary>
 								<div class="sbs-acc-body">
-									<p class="description">Fetched from the live site. Unselected plugins are neither downloaded nor deleted on the sandbox.</p>
+									<p class="description">Fetched from the live site. Unselected plugins are neither downloaded nor deleted on the sandbox. <?php echo esc_html( is_array( get_option( Sync_Runner::OPT_SYNCED_PLUGINS ) ) ? 'Plugins that only this sandbox has are kept.' : 'No earlier sync is recorded on this sandbox yet: the next one still removes plugins live does not have, and keeps them from then on.' ); ?></p>
 									<p>
 										<button type="button" class="button button-small sbs-check-all" data-target="sbs-plugin">All</button>
 										<button type="button" class="button button-small sbs-check-none" data-target="sbs-plugin">None</button>
@@ -462,7 +466,13 @@ class Admin_Page {
 						<td title="<?php echo esc_attr( (string) ( $report['error'] ?? '' ) ); ?>"><?php echo esc_html( (string) ( $report['status'] ?? 'unknown' ) ); ?><?php echo ! empty( $report['error_info']['category'] ) ? '<br><small>' . esc_html( (string) $report['error_info']['category'] ) . '</small>' : ''; ?></td>
 										<td><?php echo esc_html( (string) ( $report['source'] ?? '' ) ); ?></td>
 										<td><?php echo (int) ( $report['tables_imported'] ?? 0 ); ?> imported / <?php echo (int) ( $report['tables_skipped'] ?? 0 ); ?> skipped</td>
-										<td><?php echo esc_html( implode( ', ', (array) ( $report['dirs'] ?? array() ) ) ); ?></td>
+										<td>
+											<?php
+											echo esc_html( implode( ', ', (array) ( $report['dirs'] ?? array() ) ) );
+											$kept_summary = Sync_Runner::kept_summary( $report );
+											echo '' !== $kept_summary ? '<br><small>' . esc_html( $kept_summary ) . '</small>' : '';
+											?>
+										</td>
 										<td title="<?php echo esc_attr( $duration_s . 's' ); ?>"><?php echo esc_html( Job::format_duration( $duration_s ) ); ?></td>
 										<td>
 											<?php if ( $has_log ) : ?>

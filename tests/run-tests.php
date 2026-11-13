@@ -13,6 +13,7 @@ require __DIR__ . '/test-error-info.php';
 require __DIR__ . '/test-source-state.php';
 require __DIR__ . '/test-uploads-state.php';
 require __DIR__ . '/test-files.php';
+require __DIR__ . '/test-kept-entries.php';
 require __DIR__ . '/test-db-codec.php';
 require __DIR__ . '/test-db-shell.php';
 require __DIR__ . '/test-plan.php';
