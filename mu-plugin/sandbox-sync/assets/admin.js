@@ -227,6 +227,86 @@ function collectUploadsScope() {
 	return everything ? null : scopes;
 }
 
+// Plugin rows last loaded (live's list annotated with this sandbox's
+// state) and the sandbox's release channel, kept for the start summary.
+let pluginRows = [];
+let sandboxChannel = '';
+
+// Meta text of one plugin row: the live version, plus the sandbox version
+// when it differs; activation on live; then what a sync does with it here.
+function pluginMeta( p ) {
+	let meta = p.differs
+		? 'live v' + esc( p.version || '?' ) + ' · sandbox v' + esc( p.sandbox_version || '?' ) + ' <span class="sbs-badge sbs-differs">differs</span>'
+		: 'v' + esc( p.version || '?' );
+	meta += p.active ? ' · active' : ' · inactive';
+	if ( p.sandbox_symlink ) {
+		meta += p.symlink ? ' · kept (symlink)' : ' · kept (symlink), live copy skipped';
+	} else if ( p.symlink ) {
+		meta += ' · symlinked on live — not synced';
+	}
+	if ( p.channel_label ) {
+		meta += ' <span class="sbs-badge sbs-channel">' + esc( p.channel_label ) + '</span>';
+	}
+	return meta;
+}
+
+// Renders the plugin rows. A box the user had unticked stays unticked, so
+// reading the rows again after a sync does not undo the selection.
+function renderPlugins( data ) {
+	const list = document.getElementById( 'sbs-plugins-list' );
+	const unticked = Array.from( list.querySelectorAll( '.sbs-plugin' ) ).filter( ( el ) => ! el.checked ).map( ( el ) => el.value );
+	pluginRows = data.plugins || [];
+	sandboxChannel = data.channel || '';
+	const channelLine = sandboxChannel
+		? '<div class="sbs-channel-line">Sandbox release channel: <strong>' + esc( sandboxChannel ) + '</strong></div>'
+		: '';
+	list.innerHTML = pluginRows.length ? channelLine + pluginRows.map( ( p ) => {
+		const meta = pluginMeta( p );
+		// A plugin that is a symlink on either side never travels (the
+		// file sync skips symlinks on both sides): shown for
+		// transparency, not selectable. A symlink on this sandbox is
+		// what the sync keeps, so that row is not greyed out.
+		if ( p.symlink || p.sandbox_symlink ) {
+			return '<label class="' + ( p.sandbox_symlink ? 'sbs-kept' : 'sbs-symlinked' ) + '"><input type="checkbox" disabled> '
+				+ '<span>' + esc( p.name || p.top )
+				+ ' <span class="sbs-meta">' + meta + '</span></span></label>';
+		}
+		return '<label><input type="checkbox" class="sbs-plugin" value="' + esc( p.top ) + '"' + ( unticked.includes( p.top ) ? '' : ' checked' ) + '> '
+			+ '<span>' + esc( p.name || p.top ) + ' <span class="sbs-meta">' + meta + '</span></span></label>';
+	} ).join( '' ) : 'No plugins found on the live site.';
+}
+
+// A sync that just ended changed the sandbox side of the rows (versions,
+// counts), so they are read again. On failure they stay as they were.
+function refreshPlugins() {
+	if ( ! document.getElementById( 'sbs-plugins-list' ) ) { return; }
+	post( { op: 'fetch_source_meta' } ).then( ( res ) => {
+		if ( res.success ) {
+			renderPlugins( res.data );
+			updateHints();
+		}
+	} ).catch( () => {} );
+}
+
+// Lines for the start summary. The counts follow the same rule as
+// Plugin_Compare::summarize(): a plugin changes version when it is in the
+// selection (none = all) and its row says a sync would replace it.
+function pluginSummaryLines( dirs, selection ) {
+	let lines = '';
+	if ( pluginRows.length && dirs.includes( 'plugins' ) ) {
+		// start_job() drops names outside this pattern from a selection, so
+		// such a plugin is only synced when no selection is sent.
+		const selected = ( p ) => ! selection || ( selection.includes( p.top ) && /^[A-Za-z0-9._-]+$/.test( p.top ) );
+		const changes = pluginRows.filter( ( p ) => p.will_change && selected( p ) ).length;
+		const kept = pluginRows.filter( ( p ) => p.sandbox_symlink ).length;
+		lines += '• plugins: ' + changes + ' will change version, ' + kept + ( 1 === kept ? ' kept as a symlink' : ' kept as symlinks' ) + '\n';
+	}
+	if ( sandboxChannel ) {
+		lines += '• sandbox release channel: ' + sandboxChannel + '\n';
+	}
+	return lines;
+}
+
 function loadSourceMeta() {
 	const pluginsList = document.getElementById( 'sbs-plugins-list' );
 	if ( ! pluginsList ) { return; }
@@ -240,20 +320,7 @@ function loadSourceMeta() {
 
 		renderUploads( res.data.uploads );
 
-		const plugins = res.data.plugins || [];
-		pluginsList.innerHTML = plugins.length ? plugins.map( ( p ) => {
-			const meta = 'v' + esc( p.version || '?' ) + ( p.active ? ' · active' : ' · inactive' );
-			// Symlinked plugins never travel (the file sync skips
-			// symlinks on both sides): shown for transparency,
-			// not selectable.
-			if ( p.symlink ) {
-				return '<label class="sbs-symlinked"><input type="checkbox" disabled> '
-					+ '<span>' + esc( p.name || p.top )
-					+ ' <span class="sbs-meta">' + meta + ' · symlinked on live — not synced</span></span></label>';
-			}
-			return '<label><input type="checkbox" class="sbs-plugin" value="' + esc( p.top ) + '" checked> '
-				+ '<span>' + esc( p.name || p.top ) + ' <span class="sbs-meta">' + meta + '</span></span></label>';
-		} ).join( '' ) : 'No plugins found on the live site.';
+		renderPlugins( res.data );
 
 		const constants = res.data.constants || [];
 		document.getElementById( 'sbs-constants-list' ).innerHTML = constants.length ? constants.map( ( c ) =>
@@ -316,6 +383,8 @@ function renderJob( job ) {
 	document.getElementById( 'sbs-job-id' ).textContent = job.id;
 
 	const active  = 'running' === job.status;
+	// A sync that just ended changed the sandbox side of the plugin rows.
+	if ( jobIsActive && ! active ) { refreshPlugins(); }
 	jobIsActive = active;
 	const current = job.steps[ job.current ];
 	const uploadsActive = active && current && (
@@ -450,6 +519,7 @@ onClick( 'sbs-start', () => {
 		+ ( options.db && options.schema_only_tables.length ? '• schema-only tables recreated empty: ' + options.schema_only_tables.join( ', ' ) + '\n' : '' )
 		+ ( options.db ? '• the live site stays fully online during the export; busy tables are captured as of their own export moment\n' : '' )
 		+ ( dirs.length ? '• files: ' + dirs.join( ', ' ) + '\n' : '' )
+		+ pluginSummaryLines( dirs, options.plugins )
 		+ ( options.plugins ? '• plugins limited to: ' + options.plugins.length + ' selected\n' : '' )
 		+ ( options.uploads_scope ? '• uploads limited to: ' + ( options.uploads_scope.length ? options.uploads_scope.join( ', ' ) : 'NOTHING' ) + '\n' : '' )
 		+ ( options.uploads_full_audit ? '• uploads: rescan every selected folder; only changed payloads are hashed\n' : '• uploads: fast dirty-month tracking for WordPress-managed changes\n' )

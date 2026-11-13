@@ -144,6 +144,20 @@ function wp_remote_post( $url, $args = array() ) {
 	return new WP_Error( 'http_request_failed', 'No test HTTP response was configured.' );
 }
 
+function wp_remote_get( $url, $args = array() ) {
+	if ( isset( $GLOBALS['ss_test_remote_get'] ) && is_callable( $GLOBALS['ss_test_remote_get'] ) ) {
+		return call_user_func( $GLOBALS['ss_test_remote_get'], $url, $args );
+	}
+	return new WP_Error( 'http_request_failed', 'No test HTTP response was configured.' );
+}
+
+// Installed plugins as get_plugins() would list them: [ plugin file => headers ].
+$GLOBALS['ss_test_plugins'] = array();
+
+function get_plugins() {
+	return $GLOBALS['ss_test_plugins'];
+}
+
 function wp_remote_retrieve_response_code( $response ) {
 	return is_array( $response ) && isset( $response['response']['code'] ) ? (int) $response['response']['code'] : 0;
 }
@@ -255,6 +269,7 @@ require_once SANDBOX_SYNC_TEST_MU_DIR . '/class-tar-exporter.php';
 require_once SANDBOX_SYNC_TEST_MU_DIR . '/class-tar-extractor.php';
 require_once SANDBOX_SYNC_TEST_MU_DIR . '/class-tar-stream-extractor.php';
 require_once SANDBOX_SYNC_TEST_MU_DIR . '/class-files.php';
+require_once SANDBOX_SYNC_TEST_MU_DIR . '/class-plugin-compare.php';
 require_once SANDBOX_SYNC_TEST_MU_DIR . '/class-uploads-state.php';
 require_once SANDBOX_SYNC_TEST_MU_DIR . '/class-source-state.php';
 require_once SANDBOX_SYNC_TEST_MU_DIR . '/class-safety.php';

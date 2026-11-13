@@ -927,6 +927,38 @@ class Client {
 		);
 	}
 
+	/**
+	 * Best-effort read of the live plugin list for a running job's plugin
+	 * comparison. Like get_transfer_progress(), this is one short, non-retried
+	 * request: the comparison is informational, and the retried 600-second
+	 * get_json() path could hold the manifest step long enough for the job's
+	 * heartbeat to go stale and another worker to take over the lease.
+	 *
+	 * @return array|\WP_Error The source's `plugins` response.
+	 */
+	public static function get_source_plugins() {
+		$conn = Auth::get_connection();
+		if ( ! $conn ) {
+			return new \WP_Error( 'not_connected', 'This site is not connected to a source site.' );
+		}
+		$url_error = self::validate_source_url( $conn['source_url'] );
+		if ( is_wp_error( $url_error ) ) {
+			return $url_error;
+		}
+		$url = add_query_arg( array( 'sandbox_sync' => 'plugins' ), $conn['source_url'] . '/' );
+		return self::parse_json_response(
+			wp_remote_get(
+				$url,
+				array(
+					'timeout'             => 10,
+					'sslverify'           => self::ssl_verify( $url ),
+					'limit_response_size' => 1048576,
+					'headers'             => array( 'Authorization' => 'Bearer ' . $conn['token'] ),
+				)
+			)
+		);
+	}
+
 	private static function max_file_manifest_bytes() {
 		return max( 1048576, min( 1073741824, (int) apply_filters( 'sandbox_sync_max_file_manifest_bytes', self::MAX_FILE_MANIFEST_BYTES ) ) );
 	}
