@@ -288,23 +288,25 @@ function refreshPlugins() {
 	} ).catch( () => {} );
 }
 
-// Lines for the start summary. The counts follow the same rule as
-// Plugin_Compare::summarize(): a plugin changes version when it is in the
-// selection (none = all) and its row says a sync would replace it.
+// At most one line for the start summary, and none when there is nothing to
+// say. The counts follow the same rule as Plugin_Compare::summarize(): a
+// plugin changes version when it is in the selection (none = all) and its
+// row says a sync would replace it.
 function pluginSummaryLines( dirs, selection ) {
-	let lines = '';
+	let changes = 0;
+	let kept = 0;
 	if ( pluginRows.length && dirs.includes( 'plugins' ) ) {
 		// start_job() drops names outside this pattern from a selection, so
 		// such a plugin is only synced when no selection is sent.
 		const selected = ( p ) => ! selection || ( selection.includes( p.top ) && /^[A-Za-z0-9._-]+$/.test( p.top ) );
-		const changes = pluginRows.filter( ( p ) => p.will_change && selected( p ) ).length;
-		const kept = pluginRows.filter( ( p ) => p.sandbox_symlink ).length;
-		lines += '• plugins: ' + changes + ' will change version, ' + kept + ( 1 === kept ? ' kept as a symlink' : ' kept as symlinks' ) + '\n';
+		changes = pluginRows.filter( ( p ) => p.will_change && selected( p ) ).length;
+		kept = pluginRows.filter( ( p ) => p.sandbox_symlink ).length;
 	}
-	if ( sandboxChannel ) {
-		lines += '• sandbox release channel: ' + sandboxChannel + '\n';
+	if ( ! changes && ! kept ) {
+		return sandboxChannel ? '• sandbox release channel: ' + sandboxChannel + '\n' : '';
 	}
-	return lines;
+	return '• plugins: ' + changes + ' will change version, ' + kept + ( 1 === kept ? ' kept as a symlink' : ' kept as symlinks' )
+		+ ( sandboxChannel ? ' (sandbox channel: ' + sandboxChannel + ')' : '' ) + '\n';
 }
 
 function loadSourceMeta() {
