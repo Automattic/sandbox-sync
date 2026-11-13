@@ -27,6 +27,7 @@ define( 'SANDBOX_SYNC_DIR', __DIR__ . '/sandbox-sync' );
 
 require_once SANDBOX_SYNC_DIR . '/class-env.php';
 require_once SANDBOX_SYNC_DIR . '/class-error-info.php';
+require_once SANDBOX_SYNC_DIR . '/class-start-confirmation.php';
 require_once SANDBOX_SYNC_DIR . '/class-auth.php';
 require_once SANDBOX_SYNC_DIR . '/class-tar-exporter.php';
 require_once SANDBOX_SYNC_DIR . '/class-tar-extractor.php';

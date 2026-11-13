@@ -252,6 +252,7 @@ class Admin_Page {
 			array(
 				'nonce'      => wp_create_nonce( self::NONCE_ACTION ),
 				'initialJob' => Job::public_state( $job ),
+				'confirm'    => Start_Confirmation::strings(),
 			),
 			JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT
 		);
@@ -336,8 +337,11 @@ class Admin_Page {
 							&nbsp; <label><input type="checkbox" class="sbs-opt sbs-opt-dir" value="uploads" checked> uploads/</label>
 						</p>
 						<p>
-							<label><input type="checkbox" id="sbs-opt-incremental" checked> Incremental (only changed files/tables travel)</label>
-							&nbsp; <label><input type="checkbox" id="sbs-opt-background" checked> Run in background (keeps going if you close this tab)</label>
+							<label><input type="checkbox" id="sbs-opt-incremental" checked> Skip unchanged tables and files</label><br>
+							<span class="description">Changed tables and files are replaced with the live version, posts one at a time; sandbox edits in what is replaced are lost. Untick to replace everything selected.</span>
+						</p>
+						<p>
+							<label><input type="checkbox" id="sbs-opt-background" checked> Run in background (keeps going if you close this tab)</label>
 						</p>
 						<p>
 							<label><input type="checkbox" id="sbs-opt-uploads-audit"> Rescan all selected uploads folders (advanced)</label>

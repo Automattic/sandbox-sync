@@ -83,7 +83,8 @@ class CLI {
 	 * : Do not sync the uploads directory.
 	 *
 	 * [--full]
-	 * : Disable incremental mode (wipe + re-download everything, re-import all tables).
+	 * : Replace every selected table and directory, unchanged ones included.
+	 *   Without this flag, tables and files that did not change are skipped.
 	 *
 	 * [--audit-uploads]
 	 * : Metadata-scan every selected uploads partition. Unchanged media payloads
@@ -198,8 +199,24 @@ class CLI {
 			return;
 		}
 
+		// Same refusal as start_job(), given before the prompt: a confirmation
+		// that lists nothing to replace is not worth answering.
+		if ( empty( $options['db'] ) && empty( $options['dirs'] ) ) {
+			\WP_CLI::error( 'Nothing selected: enable the database and/or at least one directory.' );
+		}
+
 		if ( empty( $assoc_args['yes'] ) ) {
-			\WP_CLI::confirm( 'This will replace selected sandbox data/files. The live source site is never paused or frozen. Continue?' );
+			$confirm = Start_Confirmation::strings();
+			\WP_CLI::log( $confirm['intro'] );
+			foreach ( Start_Confirmation::mode_lines( $options ) as $line ) {
+				\WP_CLI::log( '  - ' . $line );
+			}
+			\WP_CLI::log( '  - the live source site is never paused or frozen' );
+			$safety = Start_Confirmation::safety_line( $options );
+			if ( null !== $safety ) {
+				\WP_CLI::log( '  - ' . $safety );
+			}
+			\WP_CLI::confirm( $confirm['outro'] );
 		}
 
 		// CLI drives the job inline; no cron worker needed.

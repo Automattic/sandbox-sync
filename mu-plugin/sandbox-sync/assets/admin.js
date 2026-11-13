@@ -445,18 +445,28 @@ onClick( 'sbs-start', () => {
 
 	const background = document.getElementById( 'sbs-opt-background' ).checked;
 
-	const summary = 'This will OVERWRITE this site with content from the live site:\n\n'
-		+ ( options.db ? '• the ENTIRE database (except excluded tables; schema-only tables are emptied)\n' : '' )
-		+ ( options.db && options.schema_only_tables.length ? '• schema-only tables recreated empty: ' + options.schema_only_tables.join( ', ' ) + '\n' : '' )
-		+ ( options.db ? '• the live site stays fully online during the export; busy tables are captured as of their own export moment\n' : '' )
-		+ ( dirs.length ? '• files: ' + dirs.join( ', ' ) + '\n' : '' )
-		+ ( options.plugins ? '• plugins limited to: ' + options.plugins.length + ' selected\n' : '' )
-		+ ( options.uploads_scope ? '• uploads limited to: ' + ( options.uploads_scope.length ? options.uploads_scope.join( ', ' ) : 'NOTHING' ) + '\n' : '' )
-		+ ( options.uploads_full_audit ? '• uploads: rescan every selected folder; only changed payloads are hashed\n' : '• uploads: fast dirty-month tracking for WordPress-managed changes\n' )
-		+ ( options.uploads_adopt ? '• uploads: never-synced folders adopt files already on this sandbox; nothing is cleared, only differences are downloaded\n' : '' )
+	// The sentences come from PHP (Start_Confirmation) so the CLI prompt uses
+	// the same words; the conditions below mirror its mode_lines() and
+	// safety_line(). They are missing when PHP still serves an older copy of
+	// the plugin than this script, right after an update.
+	const text = config.confirm;
+	if ( ! text ) { return notice( 'The plugin was just updated and this page is not consistent yet. Wait a moment, reload, and start the sync again.', false ); }
+	const incremental = options.incremental;
+	// Rescan and adopt are read only when uploads are change-tracked.
+	const uploadsSelected = dirs.includes( 'uploads' );
+	const uploadsIgnored = uploadsSelected && ( options.uploads_full_audit || options.uploads_adopt ) && ! ( incremental && options.uploads_fast );
+	// Default rules that were unticked. No line while they all apply.
+	const safetyOff = Array.from( document.querySelectorAll( '.sbs-safety' ) ).filter( ( el ) => el.defaultChecked && ! el.checked ).map( ( el ) => el.value );
+	const summary = text.intro + '\n\n'
+		+ ( options.db ? '• ' + text[ incremental ? 'db_incremental' : 'db_full' ] + '\n' : '' )
+		+ ( options.db && options.excluded_tables.length ? '• ' + text.excluded + '\n' : '' )
+		+ ( dirs.length ? '• ' + text[ incremental ? 'files_incremental' : 'files_full' ].replace( '%s', dirs.join( ', ' ) ) + '\n' : '' )
+		+ ( dirs.includes( 'plugins' ) && options.plugins ? '• plugins limited to: ' + options.plugins.length + ' selected\n' : '' )
+		+ ( uploadsSelected && options.uploads_scope ? '• uploads limited to: ' + ( options.uploads_scope.length ? options.uploads_scope.join( ', ' ) : 'nothing' ) + '\n' : '' )
+		+ ( uploadsIgnored ? '• ' + text.uploads_ignored + '\n' : '' )
 		+ ( constants.length ? '• wp-config constants replicated: ' + constants.join( ', ' ) + '\n' : '' )
-		+ '• safety envelope enabled before activation; selected data rules: ' + ( safety.length ? safety.join( ', ' ) : 'NONE (production credentials will stay live!)' ) + '\n'
-		+ '\nThe current content of this site will be lost. Continue?';
+		+ ( safety.length ? ( safetyOff.length ? '• ' + text.safety_off.replace( '%s', safetyOff.join( ', ' ) ) + '\n' : '' ) : '• ' + text.safety_none + '\n' )
+		+ '\n' + text.outro;
 	if ( ! window.confirm( summary ) ) { return; }
 
 	post( { op: 'start_job', options: JSON.stringify( options ), background: background ? '1' : '0' } )

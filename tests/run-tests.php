@@ -10,6 +10,7 @@ require __DIR__ . '/test-search-replace.php';
 require __DIR__ . '/test-tar.php';
 require __DIR__ . '/test-env.php';
 require __DIR__ . '/test-error-info.php';
+require __DIR__ . '/test-start-confirmation.php';
 require __DIR__ . '/test-source-state.php';
 require __DIR__ . '/test-uploads-state.php';
 require __DIR__ . '/test-files.php';
