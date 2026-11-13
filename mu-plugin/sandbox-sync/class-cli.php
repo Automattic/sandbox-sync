@@ -212,8 +212,11 @@ class CLI {
 				\WP_CLI::log( '  - ' . $line );
 			}
 			\WP_CLI::log( '  - the live source site is never paused or frozen' );
-			\WP_CLI::log( '  - ' . Start_Confirmation::safety_line( $options ) );
-			\WP_CLI::confirm( Start_Confirmation::outro( $options ) );
+			$safety = Start_Confirmation::safety_line( $options );
+			if ( null !== $safety ) {
+				\WP_CLI::log( '  - ' . $safety );
+			}
+			\WP_CLI::confirm( $confirm['outro'] );
 		}
 
 		// CLI drives the job inline; no cron worker needed.

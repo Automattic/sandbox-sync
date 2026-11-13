@@ -11,32 +11,28 @@ $confirm_options = array(
 	'db'                 => true,
 	'dirs'               => array( 'plugins', 'mu-plugins', 'themes', 'uploads' ),
 	'incremental'        => true,
+	'excluded_tables'    => array(),
 	'uploads_full_audit' => false,
 	'uploads_adopt'      => false,
 );
-// Hand-filled copies of the two files sentences, so the expectations do not
-// run through the code under test.
-$confirm_code_files = str_replace( '%s', 'plugins, mu-plugins, themes', $confirm_strings['files_incremental'] ?? '' );
-$confirm_all_files  = str_replace( '%s', 'plugins, mu-plugins, themes, uploads', $confirm_strings['files_full'] ?? '' );
+$confirm_all_dirs = 'plugins, mu-plugins, themes, uploads';
 
 ss_assert_same(
 	array(
 		$confirm_strings['db_incremental'] ?? null,
-		$confirm_code_files,
-		$confirm_strings['uploads_tracked'] ?? null,
-		$confirm_strings['uploads_baseline'] ?? null,
+		str_replace( '%s', $confirm_all_dirs, $confirm_strings['files_incremental'] ?? '' ),
 	),
 	Start_Confirmation::mode_lines( $confirm_options ),
-	'a default run shows the incremental database line, the code directories, then the two uploads lines'
+	'a default run shows the incremental database line, then the incremental files line with every directory'
 );
 
 ss_assert_same(
 	array(
 		$confirm_strings['db_full'] ?? null,
-		$confirm_all_files,
+		str_replace( '%s', $confirm_all_dirs, $confirm_strings['files_full'] ?? '' ),
 	),
 	Start_Confirmation::mode_lines( array_merge( $confirm_options, array( 'incremental' => false ) ) ),
-	'a full run shows the full database line and one files line that includes uploads'
+	'a full run shows the full database line, then the full files line'
 );
 
 ss_assert( ( $confirm_strings['db_incremental'] ?? '' ) !== ( $confirm_strings['db_full'] ?? '' ), 'the database sentence differs between an incremental and a full run' );
@@ -45,11 +41,11 @@ ss_assert( ( $confirm_strings['files_incremental'] ?? '' ) !== ( $confirm_string
 ss_assert_same(
 	array( $confirm_strings['db_incremental'] ?? null ),
 	Start_Confirmation::mode_lines( array_merge( $confirm_options, array( 'dirs' => array() ) ) ),
-	'a database-only run shows no files or uploads line'
+	'a database-only run shows no files line'
 );
 
 ss_assert_same(
-	array( $confirm_code_files, $confirm_strings['uploads_tracked'] ?? null, $confirm_strings['uploads_baseline'] ?? null ),
+	array( str_replace( '%s', $confirm_all_dirs, $confirm_strings['files_incremental'] ?? '' ) ),
 	Start_Confirmation::mode_lines( array_merge( $confirm_options, array( 'db' => false ) ) ),
 	'a files-only run shows no database line'
 );
@@ -66,38 +62,41 @@ ss_assert_same(
 	'the files line names only the selected directories'
 );
 
-ss_test_section( 'Start confirmation: uploads follow their own rules' );
+ss_test_section( 'Start confirmation: lines that only show when they apply' );
 
-// Tracked uploads (incremental with change tracking, the default) are compared
-// folder by folder, not file by file like the code directories, so they stay
-// out of the files sentence and say for themselves what is replaced and removed.
 ss_assert_same(
-	array( $confirm_strings['uploads_tracked'] ?? null, $confirm_strings['uploads_baseline'] ?? null ),
+	array(
+		$confirm_strings['db_incremental'] ?? null,
+		$confirm_strings['excluded'] ?? null,
+		str_replace( '%s', $confirm_all_dirs, $confirm_strings['files_incremental'] ?? '' ),
+	),
+	Start_Confirmation::mode_lines( array_merge( $confirm_options, array( 'excluded_tables' => array( 'actionscheduler_logs' ) ) ) ),
+	'excluded tables add one line right after the database line'
+);
+ss_assert_same(
+	array( str_replace( '%s', $confirm_all_dirs, $confirm_strings['files_incremental'] ?? '' ) ),
 	Start_Confirmation::mode_lines(
-		array(
-			'db'          => false,
-			'dirs'        => array( 'uploads' ),
-			'incremental' => true,
+		array_merge(
+			$confirm_options,
+			array(
+				'db'              => false,
+				'excluded_tables' => array( 'actionscheduler_logs' ),
+			)
 		)
 	),
-	'an incremental uploads-only run shows the uploads lines and no files line'
+	'excluded tables are not mentioned when the database is not synced'
 );
 
-ss_assert_same(
-	array( $confirm_strings['db_incremental'] ?? null, $confirm_code_files, $confirm_strings['uploads_audit'] ?? null, $confirm_strings['uploads_baseline'] ?? null ),
-	Start_Confirmation::mode_lines( array_merge( $confirm_options, array( 'uploads_full_audit' => true ) ) ),
-	'a rescan replaces the change-tracking line'
+// Rescan and adopt are read only when uploads are change-tracked, which is an
+// incremental run with uploads_fast on (the default). Anywhere else the run
+// ignores them, and saying so beats a silent full download.
+$confirm_full_ignored = array(
+	$confirm_strings['db_full'] ?? null,
+	str_replace( '%s', $confirm_all_dirs, $confirm_strings['files_full'] ?? '' ),
+	$confirm_strings['uploads_ignored'] ?? null,
 );
-
 ss_assert_same(
-	array( $confirm_strings['db_incremental'] ?? null, $confirm_code_files, $confirm_strings['uploads_tracked'] ?? null, $confirm_strings['uploads_adopt'] ?? null ),
-	Start_Confirmation::mode_lines( array_merge( $confirm_options, array( 'uploads_adopt' => true ) ) ),
-	'adopt replaces the line about never-synced folders being cleared'
-);
-
-// A full run takes the plain directory path: rescan and adopt are never read.
-ss_assert_same(
-	array( $confirm_strings['db_full'] ?? null, $confirm_all_files, $confirm_strings['uploads_ignored'] ?? null ),
+	$confirm_full_ignored,
 	Start_Confirmation::mode_lines(
 		array_merge(
 			$confirm_options,
@@ -110,7 +109,7 @@ ss_assert_same(
 	'a full run says that adopt has no effect'
 );
 ss_assert_same(
-	array( $confirm_strings['db_full'] ?? null, $confirm_all_files, $confirm_strings['uploads_ignored'] ?? null ),
+	$confirm_full_ignored,
 	Start_Confirmation::mode_lines(
 		array_merge(
 			$confirm_options,
@@ -122,21 +121,23 @@ ss_assert_same(
 	),
 	'a full run says that rescan has no effect'
 );
-
-// The engine tracks uploads only when uploads_fast is on as well (the default).
-// Without it an incremental run compares uploads file by file like any directory.
 ss_assert_same(
-	array(
-		$confirm_strings['db_incremental'] ?? null,
-		str_replace( '%s', 'plugins, mu-plugins, themes, uploads', $confirm_strings['files_incremental'] ?? '' ),
+	Start_Confirmation::mode_lines( $confirm_options ),
+	Start_Confirmation::mode_lines(
+		array_merge(
+			$confirm_options,
+			array(
+				'uploads_full_audit' => true,
+				'uploads_adopt'      => true,
+			)
+		)
 	),
-	Start_Confirmation::mode_lines( array_merge( $confirm_options, array( 'uploads_fast' => false ) ) ),
-	'untracked incremental uploads are described by the files sentence'
+	'rescan and adopt add no line to a run that uses them'
 );
 ss_assert_same(
 	array(
 		$confirm_strings['db_incremental'] ?? null,
-		str_replace( '%s', 'plugins, mu-plugins, themes, uploads', $confirm_strings['files_incremental'] ?? '' ),
+		str_replace( '%s', $confirm_all_dirs, $confirm_strings['files_incremental'] ?? '' ),
 		$confirm_strings['uploads_ignored'] ?? null,
 	),
 	Start_Confirmation::mode_lines(
@@ -148,20 +149,18 @@ ss_assert_same(
 			)
 		)
 	),
-	'rescan has no effect on untracked incremental uploads either'
+	'rescan has no effect on an incremental run without change tracking either'
 );
 ss_assert_same(
-	Start_Confirmation::mode_lines( $confirm_options ),
-	Start_Confirmation::mode_lines( array_merge( $confirm_options, array( 'uploads_fast' => true ) ) ),
-	'change tracking is the default when the option is not given'
-);
-
-ss_assert_same(
-	array( $confirm_strings['db_incremental'] ?? null, $confirm_code_files ),
+	array(
+		$confirm_strings['db_full'] ?? null,
+		str_replace( '%s', 'plugins, mu-plugins, themes', $confirm_strings['files_full'] ?? '' ),
+	),
 	Start_Confirmation::mode_lines(
 		array_merge(
 			$confirm_options,
 			array(
+				'incremental'        => false,
 				'dirs'               => array( 'plugins', 'mu-plugins', 'themes' ),
 				'uploads_full_audit' => true,
 				'uploads_adopt'      => true,
@@ -171,41 +170,34 @@ ss_assert_same(
 	'uploads options show nothing when uploads are not synced'
 );
 
-ss_test_section( 'Start confirmation: closing warning' );
-
-ss_assert_same( $confirm_strings['outro_incremental'] ?? null, Start_Confirmation::outro( $confirm_options ), 'an incremental run closes on the incremental warning' );
-ss_assert_same( $confirm_strings['outro_full'] ?? null, Start_Confirmation::outro( array_merge( $confirm_options, array( 'incremental' => false ) ) ), 'a full run closes on the full warning' );
-ss_assert( ( $confirm_strings['outro_incremental'] ?? '' ) !== ( $confirm_strings['outro_full'] ?? '' ), 'the closing warning differs between an incremental and a full run' );
-
 ss_test_section( 'Start confirmation: safety rules' );
 
+$confirm_default_rules = Safety::default_keys();
+ss_assert( count( $confirm_default_rules ) > 2, 'there are default safety rules to turn off' );
+
+ss_assert_same( null, Start_Confirmation::safety_line( array() ), 'the default rules need no line' );
+ss_assert_same( null, Start_Confirmation::safety_line( array( 'safety' => $confirm_default_rules ) ), 'the default rules, given explicitly, need no line' );
 ss_assert_same(
-	str_replace( '%s', 'scrub_secrets, jetpack', $confirm_strings['safety'] ?? '' ),
-	Start_Confirmation::safety_line( array( 'safety' => array( 'scrub_secrets', 'jetpack' ) ) ),
-	'the safety line names the selected rules'
-);
-ss_assert_same(
-	str_replace( '%s', $confirm_strings['safety_none'] ?? '', $confirm_strings['safety'] ?? '' ),
+	$confirm_strings['safety_none'] ?? null,
 	Start_Confirmation::safety_line( array( 'safety' => array() ) ),
 	'no selected rule shows the production-credentials warning'
 );
+ss_assert_same(
+	str_replace( '%s', $confirm_default_rules[0] . ', ' . $confirm_default_rules[2], $confirm_strings['safety_off'] ?? '' ),
+	Start_Confirmation::safety_line( array( 'safety' => array_values( array_diff( $confirm_default_rules, array( $confirm_default_rules[0], $confirm_default_rules[2] ) ) ) ) ),
+	'default rules that are turned off are named'
+);
 // A job keeps only the rule keys it knows, so a mistyped key selects nothing.
 ss_assert_same(
-	str_replace( '%s', 'jetpack', $confirm_strings['safety'] ?? '' ),
-	Start_Confirmation::safety_line( array( 'safety' => array( 'jetpak', 'jetpack' ) ) ),
-	'a rule key the job would drop is not listed'
-);
-ss_assert_same(
-	str_replace( '%s', $confirm_strings['safety_none'] ?? '', $confirm_strings['safety'] ?? '' ),
-	Start_Confirmation::safety_line( array( 'safety' => array( 'jetpak' ) ) ),
+	$confirm_strings['safety_none'] ?? null,
+	Start_Confirmation::safety_line( array( 'safety' => array( 'not_a_rule' ) ) ),
 	'only mistyped rule keys show the production-credentials warning'
 );
 ss_assert_same(
-	str_replace( '%s', implode( ', ', Safety::default_keys() ), $confirm_strings['safety'] ?? '' ),
-	Start_Confirmation::safety_line( array() ),
-	'the default rules apply when no selection is given'
+	str_replace( '%s', implode( ', ', array_slice( $confirm_default_rules, 1 ) ), $confirm_strings['safety_off'] ?? '' ),
+	Start_Confirmation::safety_line( array( 'safety' => array( 'not_a_rule', $confirm_default_rules[0] ) ) ),
+	'a mistyped key does not count as a selected rule'
 );
-ss_assert( count( Safety::default_keys() ) > 0, 'there are default safety rules to list' );
 
 ss_test_section( 'Start confirmation: wording contract' );
 
@@ -213,14 +205,18 @@ ss_assert( count( $confirm_strings ) > 0, 'the sentence table is not empty' );
 foreach ( $confirm_strings as $confirm_key => $confirm_text ) {
 	ss_assert( is_string( $confirm_text ) && '' !== $confirm_text, "the {$confirm_key} sentence is a non-empty string" );
 	ss_assert( 1 !== preg_match( '/\b[A-Z]{2,}\b/', (string) $confirm_text ), "the {$confirm_key} sentence has no all-caps word" );
-	// The admin script fills one list into the two files sentences and into
-	// the safety sentence, and nothing anywhere else.
+	// The admin script fills one list into each of these three sentences and
+	// nothing anywhere else.
 	ss_assert_same(
-		in_array( $confirm_key, array( 'files_incremental', 'files_full', 'safety' ), true ) ? 1 : 0,
+		in_array( $confirm_key, array( 'files_incremental', 'files_full', 'safety_off' ), true ) ? 1 : 0,
 		substr_count( (string) $confirm_text, '%' ),
 		"the {$confirm_key} sentence has exactly the placeholders the admin script fills"
 	);
 }
-foreach ( array( 'files_incremental', 'files_full', 'safety' ) as $confirm_key ) {
+foreach ( array( 'files_incremental', 'files_full', 'safety_off' ) as $confirm_key ) {
 	ss_assert_same( 1, substr_count( $confirm_strings[ $confirm_key ] ?? '', '%s' ), "the {$confirm_key} placeholder is %s" );
+}
+// A confirmation nobody reads protects nothing: keep every sentence short.
+foreach ( $confirm_strings as $confirm_key => $confirm_text ) {
+	ss_assert( str_word_count( (string) $confirm_text ) <= 22, "the {$confirm_key} sentence stays within 22 words" );
 }
