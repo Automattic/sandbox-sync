@@ -546,7 +546,9 @@ class Source_Endpoints {
 
 	/**
 	 * Installed plugins on this site, so the sandbox can offer a per-plugin
-	 * sync selection.
+	 * sync selection, plus the top-level layout of plugins/ and themes/. An
+	 * entry this site runs as a symlink reaches no sandbox through a sync, and
+	 * the sandbox needs its name to keep a local build of the same package.
 	 */
 	private static function handle_plugins() {
 		if ( ! function_exists( 'get_plugins' ) ) {
@@ -572,7 +574,15 @@ class Source_Endpoints {
 			);
 		}
 
-		self::respond_json( array( 'plugins' => $plugins ) );
+		self::respond_json(
+			array(
+				'plugins' => $plugins,
+				'tops'    => array(
+					'plugins' => Files::top_level_listing( WP_CONTENT_DIR . '/plugins' ),
+					'themes'  => Files::top_level_listing( WP_CONTENT_DIR . '/themes' ),
+				),
+			)
+		);
 	}
 
 	// -- files_manifest -------------------------------------------------------

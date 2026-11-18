@@ -455,6 +455,8 @@ class Auth {
 			Sync_Runner::OPT_TABLE_STATE,
 			Sync_Runner::OPT_LAST_REPORT,
 			Sync_Runner::OPT_HISTORY,
+			Sync_Runner::OPT_SYNCED_PLUGINS,
+			Sync_Runner::OPT_SYNCED_THEMES,
 			Uploads_State::OPT_CURSOR,
 			'sandbox_sync_source_freeze_id',
 			'sandbox_sync_transfer_id',

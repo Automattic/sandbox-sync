@@ -1165,6 +1165,63 @@ trait Sync_Runner_Database {
 	}
 
 	/**
+	 * Kept plugins whose activation the swap carries. A sync that planned
+	 * plugins/ decided there what it keeps. One that leaves plugins/ alone
+	 * worked it out from live's reported layout when it refreshed the manifest,
+	 * so both kinds of sync give the same answer.
+	 *
+	 * @param array $job Job.
+	 * @return string[] Top-level plugin entries.
+	 */
+	private static function kept_plugins_for_activation( $job ) {
+		foreach ( array( 'kept_plugins', 'activation_kept' ) as $key ) {
+			if ( isset( $job[ $key ] ) && is_array( $job[ $key ] ) ) {
+				return $job[ $key ];
+			}
+		}
+		return array();
+	}
+
+	/**
+	 * Appends the sandbox's kept, active plugins to the activation list in the
+	 * shadow options table, before that table replaces the sandbox's own.
+	 *
+	 * @param array  $job            Job; logged to when an activation is carried.
+	 * @param string $shadow_options Shadow options table.
+	 * @return true|\WP_Error
+	 */
+	private static function carry_kept_plugin_activation( &$job, $shadow_options ) {
+		global $wpdb;
+		$kept = self::kept_plugins_for_activation( $job );
+		if ( empty( $kept ) ) {
+			return true;
+		}
+		// Read both rows as stored: option filters and caches describe the
+		// running request, not what the swap replaces.
+		$local_raw  = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'active_plugins' ) );
+		$shadow_raw = $wpdb->get_var( $wpdb->prepare( 'SELECT option_value FROM %i WHERE option_name = %s', $shadow_options, 'active_plugins' ) );
+		$imported   = null === $shadow_raw ? array() : maybe_unserialize( $shadow_raw );
+		$merged     = self::carry_kept_active_plugins( $imported, null === $local_raw ? array() : maybe_unserialize( $local_raw ), $kept );
+		$carried    = array();
+		foreach ( $merged as $plugin ) {
+			if ( ! is_array( $imported ) || ! in_array( $plugin, $imported, true ) ) {
+				$carried[] = $plugin;
+			}
+		}
+		if ( empty( $carried ) ) {
+			return true;
+		}
+		$written = null === $shadow_raw
+			? $wpdb->query( $wpdb->prepare( "INSERT INTO %i (option_name, option_value, autoload) VALUES (%s, %s, 'yes')", $shadow_options, 'active_plugins', maybe_serialize( $merged ) ) )
+			: $wpdb->query( $wpdb->prepare( 'UPDATE %i SET option_value = %s WHERE option_name = %s', $shadow_options, maybe_serialize( $merged ), 'active_plugins' ) );
+		if ( false === $written ) {
+			return new \WP_Error( 'active_plugins_carry', 'Failed keeping sandbox-only plugins active across the swap: ' . $wpdb->last_error );
+		}
+		Job::log( $job, sprintf( 'Kept %d sandbox-only plugin(s) active across the database swap: %s.', count( $carried ), implode( ', ', $carried ) ) );
+		return true;
+	}
+
+	/**
 	 * Writes into the shadow tables everything the sandbox must keep across
 	 * the swap: its connection/flag/job options and the job creator's
 	 * credentials + session.
@@ -1207,6 +1264,13 @@ trait Sync_Runner_Database {
 				if ( false === $inserted ) {
 					return new \WP_Error( 'option_preserve', "Failed preserving sandbox option {$name}: " . $wpdb->last_error );
 				}
+			}
+
+			// Plugins only the sandbox has stay active: their activation lives
+			// in a row that live's copy is about to replace.
+			$carried = self::carry_kept_plugin_activation( $job, $shadow_options );
+			if ( is_wp_error( $carried ) ) {
+				return $carried;
 			}
 
 			// Prefix-bearing option/meta keys are data, not table identifiers. Map

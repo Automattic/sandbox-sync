@@ -98,6 +98,307 @@ class Sync_Runner {
 	// email kill switch installed by the safety step.
 	const PROTECTED_PLUGINS = array( Safety::STOP_EMAILS_SLUG );
 
+	// Top-level entries the last sync wrote into plugins/ and themes/. An entry
+	// on the sandbox that is neither on live nor in its record was installed
+	// there by someone, so the sync keeps it instead of deleting it.
+	const OPT_SYNCED_PLUGINS = 'sandbox_sync_synced_plugins';
+	const OPT_SYNCED_THEMES  = 'sandbox_sync_synced_themes';
+	const KEPT_DIRS          = array(
+		'plugins' => self::OPT_SYNCED_PLUGINS,
+		'themes'  => self::OPT_SYNCED_THEMES,
+	);
+
+	// -- Kept sandbox-only entries -------------------------------------------------
+
+	/**
+	 * Top-level entries of plugins/ or themes/ that only the sandbox has and
+	 * that the sync must leave alone.
+	 *
+	 * With a record, an entry survives when live does not deliver it and no
+	 * earlier sync wrote it. Without one there is no telling a local install
+	 * from an entry live has since removed, so only an entry live runs as a
+	 * symlink is kept: a symlink never travels, which makes a real directory
+	 * of that name on the sandbox a local build.
+	 *
+	 * @param string[] $local      Candidate entries on the sandbox.
+	 * @param string[] $remote     Top-level names in live's file manifest.
+	 * @param mixed    $record     Names the last sync wrote; anything but an array means no record yet.
+	 * @param string[] $live_links Names live holds as symlinks.
+	 * @param string[] $protected  Names with their own unconditional protection.
+	 * @return string[] Sorted names.
+	 */
+	public static function kept_top_level_names( $local, $remote, $record, $live_links, $protected = array() ) {
+		$live_links = self::sorted_names( $live_links );
+		$candidates = array_diff( self::sorted_names( $local ), (array) $protected, self::sorted_names( $remote ) );
+		$kept       = is_array( $record )
+			? array_diff( $candidates, array_diff( self::sorted_names( $record ), $live_links ) )
+			: array_intersect( $candidates, $live_links );
+		return self::sorted_names( $kept );
+	}
+
+	/**
+	 * Sandbox entries that can be a plugin or a theme: real directories, plus
+	 * single PHP files in plugins/. Any other stray file keeps following live,
+	 * and so does index.php: it guards the directory and is no plugin, and a
+	 * live site that reports its plugins only would never account for it.
+	 *
+	 * @param string $dir     'plugins' or 'themes'.
+	 * @param array  $listing Files::top_level_listing() of the sandbox directory.
+	 * @return string[] Sorted names.
+	 */
+	public static function kept_candidates( $dir, $listing ) {
+		$candidates = isset( $listing['dirs'] ) && is_array( $listing['dirs'] ) ? $listing['dirs'] : array();
+		if ( 'plugins' === $dir && isset( $listing['files'] ) && is_array( $listing['files'] ) ) {
+			foreach ( $listing['files'] as $file ) {
+				if ( is_string( $file ) && 'index.php' !== $file && 'php' === strtolower( (string) pathinfo( $file, PATHINFO_EXTENSION ) ) ) {
+					$candidates[] = $file;
+				}
+			}
+		}
+		return self::sorted_names( $candidates );
+	}
+
+	/**
+	 * The record to store once this sync is final: what live delivered, minus
+	 * the names the sandbox holds as symlinks, which a sync never writes. A
+	 * per-plugin selection only speaks for the selected entries.
+	 *
+	 * @param string[]      $remote      Top-level names in live's file manifest.
+	 * @param string[]      $previous    The record before this sync.
+	 * @param string[]|null $selection   Per-plugin selection, or null when the whole directory synced.
+	 * @param string[]      $local_links Names the sandbox holds as symlinks.
+	 * @return string[] Sorted names.
+	 */
+	public static function next_synced_record( $remote, $previous, $selection, $local_links ) {
+		$written = array_diff( self::sorted_names( $remote ), self::sorted_names( $local_links ) );
+		if ( ! is_array( $selection ) ) {
+			return self::sorted_names( $written );
+		}
+		$selection = self::sorted_names( $selection );
+		return self::sorted_names(
+			array_merge(
+				array_diff( self::sorted_names( $previous ), $selection ),
+				array_intersect( $written, $selection )
+			)
+		);
+	}
+
+	/**
+	 * Live's activation list with the sandbox's kept plugins appended, so a
+	 * kept plugin that was active is still active after the swap. Live's own
+	 * order is left as it is.
+	 *
+	 * @param mixed    $imported     active_plugins as imported from live.
+	 * @param mixed    $local_active active_plugins on the sandbox before the swap.
+	 * @param string[] $kept         Kept top-level plugin entries.
+	 * @return string[]
+	 */
+	public static function carry_kept_active_plugins( $imported, $local_active, $kept ) {
+		$merged = array();
+		foreach ( is_array( $imported ) ? $imported : array() as $plugin ) {
+			if ( is_string( $plugin ) ) {
+				$merged[] = $plugin;
+			}
+		}
+		foreach ( is_array( $local_active ) ? $local_active : array() as $plugin ) {
+			if ( is_string( $plugin ) && in_array( strtok( $plugin, '/' ), (array) $kept, true ) && ! in_array( $plugin, $merged, true ) ) {
+				$merged[] = $plugin;
+			}
+		}
+		return $merged;
+	}
+
+	/**
+	 * Real and symlinked top-level names live reports for a code directory.
+	 * 'real' is null when live cannot say: a release that predates the layout
+	 * report describes its plugins only.
+	 *
+	 * @param mixed  $response Decoded response of the source `plugins` action.
+	 * @param string $dir      'plugins' or 'themes'.
+	 * @return array{real:string[]|null,links:string[]}
+	 */
+	public static function live_top_levels( $response, $dir ) {
+		$none = array(
+			'real'  => null,
+			'links' => array(),
+		);
+		if ( ! is_array( $response ) ) {
+			return $none;
+		}
+		if ( isset( $response['tops'] ) && is_array( $response['tops'] ) && isset( $response['tops'][ $dir ] ) && is_array( $response['tops'][ $dir ] ) ) {
+			$tops = $response['tops'][ $dir ];
+			return array(
+				'real'  => self::sorted_names(
+					array_merge(
+						isset( $tops['dirs'] ) && is_array( $tops['dirs'] ) ? $tops['dirs'] : array(),
+						isset( $tops['files'] ) && is_array( $tops['files'] ) ? $tops['files'] : array()
+					)
+				),
+				'links' => self::sorted_names( isset( $tops['links'] ) ? $tops['links'] : array() ),
+			);
+		}
+		if ( 'plugins' !== $dir || ! isset( $response['plugins'] ) || ! is_array( $response['plugins'] ) ) {
+			return $none;
+		}
+		$real  = array();
+		$links = array();
+		foreach ( $response['plugins'] as $plugin ) {
+			if ( ! is_array( $plugin ) || ! isset( $plugin['top'] ) ) {
+				continue;
+			}
+			if ( ! empty( $plugin['symlink'] ) ) {
+				$links[] = $plugin['top'];
+			} else {
+				$real[] = $plugin['top'];
+			}
+		}
+		return array(
+			'real'  => self::sorted_names( $real ),
+			'links' => self::sorted_names( $links ),
+		);
+	}
+
+	/**
+	 * What a sync started now would keep, for the start confirmation. The
+	 * plan step decides again from live's file manifest; this stands in live's
+	 * reported layout for it, so the two can only differ when live changes
+	 * in between. Where live cannot report its layout, nothing is promised.
+	 *
+	 * @param mixed $response Decoded response of the source `plugins` action.
+	 * @return array{plugins:string[],themes:string[]}
+	 */
+	public static function preview_kept( $response ) {
+		$preview = array();
+		foreach ( self::KEPT_DIRS as $dir => $option ) {
+			$live            = self::live_top_levels( $response, $dir );
+			$record          = get_option( $option );
+			$preview[ $dir ] = ! is_array( $live['real'] ) ? array() : self::kept_top_level_names(
+				self::kept_candidates( $dir, Files::top_level_listing( WP_CONTENT_DIR . '/' . $dir ) ),
+				$live['real'],
+				is_array( $record ) ? $record : null,
+				$live['links'],
+				'plugins' === $dir ? self::PROTECTED_PLUGINS : array()
+			);
+		}
+		return $preview;
+	}
+
+	/**
+	 * Sandbox-only entries the next sync removes because no earlier sync is
+	 * recorded yet, for the start confirmation: the one time this still
+	 * happens deserves to be said before the sync starts, not in its log.
+	 * Empty once a record exists. Null where live's directory cannot be
+	 * listed: the sync removes what live lacks all the same, but whether the
+	 * sandbox has such entries, and which, cannot be said.
+	 *
+	 * @param mixed $response Decoded response of the source `plugins` action, or its error.
+	 * @return array{plugins:string[]|null,themes:string[]|null}
+	 */
+	public static function preview_first_sync_removals( $response ) {
+		$removals = array();
+		foreach ( self::KEPT_DIRS as $dir => $option ) {
+			$removals[ $dir ] = array();
+			if ( is_array( get_option( $option ) ) ) {
+				continue;
+			}
+			$protected  = 'plugins' === $dir ? self::PROTECTED_PLUGINS : array();
+			$candidates = array_diff( self::kept_candidates( $dir, Files::top_level_listing( WP_CONTENT_DIR . '/' . $dir ) ), $protected );
+			$live       = self::live_top_levels( $response, $dir );
+			if ( ! is_array( $live['real'] ) ) {
+				$removals[ $dir ] = array() === $candidates ? array() : null;
+				continue;
+			}
+			$kept             = self::kept_top_level_names( $candidates, $live['real'], null, $live['links'], $protected );
+			$removals[ $dir ] = self::sorted_names( array_diff( $candidates, $live['real'], $kept ) );
+		}
+		return $removals;
+	}
+
+	/**
+	 * Code directories from which a sync with these options still removes
+	 * sandbox-only entries: the selected ones no earlier sync has recorded.
+	 * A per-plugin selection leaves every plugin outside it alone.
+	 *
+	 * @param array $options Sync options: 'dirs' and, for a per-plugin selection, 'plugins'.
+	 * @return string[]
+	 */
+	public static function first_sync_dirs( $options ) {
+		$selected = isset( $options['dirs'] ) && is_array( $options['dirs'] ) ? $options['dirs'] : array();
+		$dirs     = array();
+		foreach ( self::KEPT_DIRS as $dir => $option ) {
+			if ( ! in_array( $dir, $selected, true ) || is_array( get_option( $option ) ) ) {
+				continue;
+			}
+			if ( 'plugins' === $dir && isset( $options['plugins'] ) && is_array( $options['plugins'] ) ) {
+				continue;
+			}
+			$dirs[] = $dir;
+		}
+		return $dirs;
+	}
+
+	/**
+	 * What a first sync removes from the given directories, one sentence
+	 * each, for the command line. The wp-admin confirmation lists the same
+	 * from preview_first_sync_removals().
+	 *
+	 * @param mixed    $response Decoded response of the source `plugins` action, or its error.
+	 * @param string[] $dirs     Result of first_sync_dirs().
+	 * @return string[]
+	 */
+	public static function first_sync_removal_lines( $response, $dirs ) {
+		$removals = self::preview_first_sync_removals( $response );
+		$lines    = array();
+		foreach ( $removals as $dir => $names ) {
+			if ( ! in_array( $dir, (array) $dirs, true ) ) {
+				continue;
+			}
+			if ( null === $names ) {
+				$lines[] = sprintf( 'No earlier sync is recorded for %1$s/, so this one still removes any %1$s only this sandbox has. Live\'s %1$s could not be listed, so they cannot be named here.', $dir );
+			} elseif ( array() !== $names ) {
+				$lines[] = sprintf( 'No earlier sync is recorded for %1$s/, so this one still removes the %1$s only this sandbox has: %2$s.', $dir, implode( ', ', $names ) );
+			}
+		}
+		return $lines;
+	}
+
+	/**
+	 * One line naming what a finished sync kept, for the history table.
+	 * Empty when it kept nothing, or for a report older than this record.
+	 *
+	 * @param mixed $report Sync report.
+	 * @return string
+	 */
+	public static function kept_summary( $report ) {
+		$parts = array();
+		foreach ( array_keys( self::KEPT_DIRS ) as $dir ) {
+			$names = self::sorted_names( is_array( $report ) && isset( $report[ 'kept_' . $dir ] ) ? $report[ 'kept_' . $dir ] : array() );
+			if ( ! empty( $names ) ) {
+				$parts[] = 'kept ' . $dir . ': ' . implode( ', ', $names );
+			}
+		}
+		return implode( '; ', $parts );
+	}
+
+	/**
+	 * Unique non-empty string names, sorted. Names stay values throughout: a
+	 * directory called "2024" would turn into an integer as an array key.
+	 *
+	 * @param mixed $names Candidate names.
+	 * @return string[]
+	 */
+	private static function sorted_names( $names ) {
+		$clean = array();
+		foreach ( is_array( $names ) ? $names : array() as $name ) {
+			if ( is_string( $name ) && '' !== $name ) {
+				$clean[] = $name;
+			}
+		}
+		$clean = array_values( array_unique( $clean ) );
+		sort( $clean, SORT_STRING );
+		return $clean;
+	}
+
 	// -- Job lifecycle -----------------------------------------------------------
 
 	/**
@@ -786,6 +1087,23 @@ class Sync_Runner {
 			}
 			$job['force_tables'] = $all_unchanged ? array() : $identity;
 		}
+		// A sync that does not plan plugins/ still replaces the activation
+		// list, so it needs the same answer about which plugins live lacks.
+		// It asks only when that answer can change something. When live
+		// answers with an error, the sync goes on without it; a request that
+		// got no answer stops the step, like any other request here.
+		$carry_candidates = isset( $job['kept_plugins'] ) ? array() : self::activation_carry_candidates( $job );
+		if ( array() !== $carry_candidates ) {
+			$live_tops = self::live_tops( $job );
+			if ( is_wp_error( $live_tops ) && ! self::live_answered_unusably( $live_tops ) ) {
+				return $live_tops;
+			}
+			$checkpoint = self::checkpoint( $job );
+			if ( is_wp_error( $checkpoint ) ) {
+				return $checkpoint;
+			}
+			self::plan_activation_carry( $job, $live_tops, $carry_candidates );
+		}
 		Job::save( $job );
 		return array( 'message' => sprintf( 'Database manifest refreshed after online pre-copy: %d tables rebound to fresh row/checksum metadata.', count( $manifest['tables'] ) ) );
 	}
@@ -1037,9 +1355,28 @@ class Sync_Runner {
 		// registered working tables left are per-table import checkpoints —
 		// drop them here or every successful sync leaks one per chunked table.
 		$db_removed += self::drop_working_tables( $job );
-		$removed     = self::finalize_file_dirs( $job );
+		// Before the rollback trees are deleted, which can take long enough for
+		// a hosted platform to kill the worker: the sync is final from here on.
+		self::commit_synced_records( $job );
+		$removed = self::finalize_file_dirs( $job );
 		self::write_report( $job );
 		return array( 'message' => sprintf( 'Finalized sync and removed %d database plus %d file rollback/staging resource(s).', $db_removed, $removed ) );
+	}
+
+	/**
+	 * Stores what this sync wrote to plugins/ and themes/. Called only by the
+	 * finalize step: a sync that failed or was cancelled leaves the sandbox
+	 * as it was, and so must its records.
+	 *
+	 * @param array $job Finished job.
+	 */
+	private static function commit_synced_records( $job ) {
+		foreach ( self::KEPT_DIRS as $dir => $option ) {
+			$key = 'synced_' . $dir . '_next';
+			if ( isset( $job[ $key ] ) && is_array( $job[ $key ] ) ) {
+				update_option( $option, self::sorted_names( $job[ $key ] ), false );
+			}
+		}
 	}
 
 	private static function write_report( $job, $status = 'done' ) {
@@ -1059,6 +1396,8 @@ class Sync_Runner {
 			'tables_imported' => count( $job['imported'] ),
 			'tables_skipped'  => $skipped,
 			'dirs'            => $job['options']['dirs'],
+			'kept_plugins'    => self::sorted_names( isset( $job['kept_plugins'] ) ? $job['kept_plugins'] : array() ),
+			'kept_themes'     => self::sorted_names( isset( $job['kept_themes'] ) ? $job['kept_themes'] : array() ),
 			'error'           => isset( $job['error'] ) ? $job['error'] : '',
 			'error_info'      => isset( $job['error_info'] ) && is_array( $job['error_info'] ) ? $job['error_info'] : null,
 			'has_log'         => null !== Job::log_path( $job_id ) && is_file( (string) Job::log_path( $job_id ) ),
