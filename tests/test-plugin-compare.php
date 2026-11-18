@@ -613,23 +613,23 @@ unset( $GLOBALS['ss_test_remote_get'] );
 ss_test_section( 'Sync runner: plugin comparison recorded at the manifest step' );
 ss_test_reset_options();
 
-// Runs the private recording step on a job and returns the job it left.
-function ss_pc_record_plugin_changes( array $job ) {
+// Runs the private recording step on a job, with the sandbox side read from
+// the given content directory, and returns the job it left.
+function ss_pc_record_plugin_changes( array $job, $content_dir ) {
 	$record = new ReflectionMethod( Sync_Runner::class, 'record_plugin_changes' );
 	if ( PHP_VERSION_ID < 80100 ) {
 		$record->setAccessible( true );
 	}
-	$record->invokeArgs( null, array( &$job ) );
+	$record->invokeArgs( null, array( &$job, $content_dir ) );
 	return $job;
 }
 Auth::save_connection( 'https://live.example.com', 'test-bearer' );
-$GLOBALS['ss_test_plugins'] = array(
-	'classic-widgets/classic-widgets.php' => array(
-		'Name'    => 'Classic Widgets',
-		'Version' => '0.2',
-	),
-);
-$pc_running                 = array(
+// The sandbox is the tree built above: newspack-plugin and hello.php are
+// symlinks, real-plugin is a real directory, a branch build sits beside its
+// backup link, and the theme is linked to canary.
+$GLOBALS['ss_test_plugins'] = $pc_installed;
+update_option( 'newspack_manager_release_channel_branch', 'fix/foo' );
+$pc_running   = array(
 	'id'       => '',
 	'status'   => Job::S_RUNNING,
 	'options'  => array(
@@ -639,7 +639,13 @@ $pc_running                 = array(
 	'manifest' => array( 'dirs' => array( 'plugins', 'uploads' ) ),
 	'log'      => array(),
 );
-$pc_live_list               = array( 'plugins' => array( ss_pc_live_row( 'classic-widgets/classic-widgets.php', '0.3' ) ) );
+$pc_live_list = array(
+	'plugins' => array(
+		ss_pc_live_row( 'newspack-plugin/newspack.php', '6.20.1' ),
+		ss_pc_live_row( 'real-plugin/real-plugin.php', '1.4.0' ),
+		ss_pc_live_row( 'hello.php', '1.7.2' ),
+	),
+);
 
 $pc_reads                      = 0;
 $GLOBALS['ss_test_remote_get'] = function () use ( &$pc_reads, $pc_live_list ) {
@@ -649,19 +655,38 @@ $GLOBALS['ss_test_remote_get'] = function () use ( &$pc_reads, $pc_live_list ) {
 		'body'     => wp_json_encode( $pc_live_list ),
 	);
 };
-$pc_job_ok                     = ss_pc_record_plugin_changes( $pc_running );
-// This reads the real content directory of the test run, so only the count
-// that the fixtures here decide is asserted.
-ss_assert_same( 1, isset( $pc_job_ok['plugin_changes']['version_changes'] ) ? $pc_job_ok['plugin_changes']['version_changes'] : null, 'the job records how many plugins it is about to move to another version' );
-ss_assert( 1 === count( $pc_job_ok['log'] ) && 0 === strpos( $pc_job_ok['log'][0][1], 'Plugins: 1 will change version, ' ), 'and logs the counts, which is what a CLI run prints' );
+$pc_job_ok                     = ss_pc_record_plugin_changes( $pc_running, $pc_root );
+ss_assert_same(
+	array(
+		'version_changes' => 1,
+		'kept_symlinks'   => 2,
+		'channel'         => 'Canary, with branch fix/foo layered on top',
+	),
+	isset( $pc_job_ok['plugin_changes'] ) ? $pc_job_ok['plugin_changes'] : null,
+	'the job records what it is about to do with the plugins of its content directory, and the channel read there'
+);
+ss_assert_same(
+	array( 'Plugins: 1 will change version, 2 kept as symlinks; sandbox release channel: Canary, with branch fix/foo layered on top.' ),
+	array_column( $pc_job_ok['log'], 1 ),
+	'and logs it in one line, which is what a CLI run prints'
+);
 ss_assert_same( 1, $pc_reads, "it reads live's plugin list once" );
+
+$pc_limited                       = $pc_running;
+$pc_limited['options']['plugins'] = array( 'newspack-plugin' );
+$pc_job_limited                   = ss_pc_record_plugin_changes( $pc_limited, $pc_root );
+ss_assert_same(
+	array( 0, 2 ),
+	isset( $pc_job_limited['plugin_changes'] ) ? array( $pc_job_limited['plugin_changes']['version_changes'], $pc_job_limited['plugin_changes']['kept_symlinks'] ) : null,
+	"the job's plugin selection limits the version changes it counts"
+);
 
 $pc_reads                      = 0;
 $GLOBALS['ss_test_remote_get'] = function () use ( &$pc_reads ) {
 	++$pc_reads;
 	return new WP_Error( 'http_request_failed', 'Operation timed out' );
 };
-$pc_job_unread                 = ss_pc_record_plugin_changes( $pc_running );
+$pc_job_unread                 = ss_pc_record_plugin_changes( $pc_running, $pc_root );
 ss_assert( ! array_key_exists( 'plugin_changes', $pc_job_unread ), 'when the live list cannot be read the job carries no counts' );
 ss_assert( 1 === count( $pc_job_unread['log'] ) && false !== strpos( $pc_job_unread['log'][0][1], 'Operation timed out' ), 'the job log says why the comparison is missing' );
 ss_assert_same( 1, $pc_reads, 'and the read is not repeated' );
@@ -669,10 +694,10 @@ ss_assert_same( 1, $pc_reads, 'and the read is not repeated' );
 $pc_reads                           = 0;
 $pc_not_selected                    = $pc_running;
 $pc_not_selected['options']['dirs'] = array( 'uploads' );
-$pc_job_skipped                     = ss_pc_record_plugin_changes( $pc_not_selected );
+$pc_job_skipped                     = ss_pc_record_plugin_changes( $pc_not_selected, $pc_root );
 $pc_not_on_live                     = $pc_running;
 $pc_not_on_live['manifest']['dirs'] = array( 'uploads' );
-$pc_job_no_dir                      = ss_pc_record_plugin_changes( $pc_not_on_live );
+$pc_job_no_dir                      = ss_pc_record_plugin_changes( $pc_not_on_live, $pc_root );
 ss_assert( ! array_key_exists( 'plugin_changes', $pc_job_skipped ) && array() === $pc_job_skipped['log'], 'a job that does not sync plugins/ records and logs nothing' );
 ss_assert( ! array_key_exists( 'plugin_changes', $pc_job_no_dir ) && array() === $pc_job_no_dir['log'], 'nor does a job whose source has no plugins/ directory to sync' );
 ss_assert_same( 0, $pc_reads, 'and neither asks live for its plugin list' );

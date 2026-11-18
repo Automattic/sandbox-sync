@@ -103,6 +103,8 @@ jobs:
           test "$(wp user get admin --path=/tmp/sandbox --field=user_email)" = 'sandbox@example.invalid'
           test "$(wp option get blog_public --path=/tmp/sandbox)" = '0'
           test "$(wp option get sandbox_sync_block_email --path=/tmp/sandbox)" = '1'
+          # The manifest step compared the two plugin lists, and the history entry says so.
+          wp sandbox-sync history --path=/tmp/sandbox | grep -Eq '^ +plugins: [0-9]+ changed version, [0-9]+ kept as'
           test "$(wp db query --path=/tmp/sandbox --skip-column-names "SELECT COUNT(*) FROM sb_sandbox_sync_empty_keyless;")" = '0'
           test "$(wp db query --path=/tmp/sandbox --skip-column-names "SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sb_sandbox_sync_empty_keyless' AND INDEX_NAME = 'PRIMARY';")" = '0'
           test "$(wp db query --path=/tmp/sandbox --skip-column-names "SELECT COUNT(*) FROM sb_newspack_newsletters_subscription_attempts;")" = '0'

@@ -953,14 +953,16 @@ class Sync_Runner {
 	 * short read of live's plugin list, and must not checkpoint or save: a
 	 * replayed manifest step would then insert the plan twice.
 	 *
-	 * @param array $job By reference.
+	 * @param array  $job         By reference.
+	 * @param string $content_dir wp-content directory whose plugins/ and
+	 *                            themes/ are this site's side of the comparison.
 	 */
-	private static function record_plugin_changes( &$job ) {
+	private static function record_plugin_changes( &$job, $content_dir = WP_CONTENT_DIR ) {
 		if ( ! in_array( 'plugins', (array) $job['options']['dirs'], true ) || ! in_array( 'plugins', (array) $job['manifest']['dirs'], true ) ) {
 			return;
 		}
 		$live_plugins = Client::get_source_plugins();
-		$summary      = Plugin_Compare::job_summary( $live_plugins, Plugin_Compare::read_local(), $job['options']['plugins'] );
+		$summary      = Plugin_Compare::job_summary( $live_plugins, Plugin_Compare::read_local( $content_dir ), $job['options']['plugins'] );
 		if ( null === $summary ) {
 			Job::log(
 				$job,
