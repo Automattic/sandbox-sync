@@ -934,6 +934,9 @@ class Client {
 	 * get_json() path could hold the manifest step long enough for the job's
 	 * heartbeat to go stale and another worker to take over the lease.
 	 *
+	 * A redirect is not followed, as on the cURL paths: WordPress would resend
+	 * the bearer token to wherever it points and take that answer for live's.
+	 *
 	 * @return array|\WP_Error The source's `plugins` response.
 	 */
 	public static function get_source_plugins() {
@@ -951,6 +954,7 @@ class Client {
 				$url,
 				array(
 					'timeout'             => 10,
+					'redirection'         => 0,
 					'sslverify'           => self::ssl_verify( $url ),
 					'limit_response_size' => 1048576,
 					'headers'             => array( 'Authorization' => 'Bearer ' . $conn['token'] ),

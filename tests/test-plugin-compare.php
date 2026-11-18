@@ -584,6 +584,7 @@ ss_assert(
 	isset( $pc_requests[0][1]['timeout'] ) && $pc_requests[0][1]['timeout'] <= 15,
 	'the request is bounded to seconds: a job whose heartbeat is ' . Job::CHUNK_LOCK_TTL . ' s old loses its lease to another worker'
 );
+ss_assert_same( 0, isset( $pc_requests[0][1]['redirection'] ) ? $pc_requests[0][1]['redirection'] : null, 'a redirect is not followed: WordPress would resend the bearer token to wherever it points' );
 
 $pc_calls                      = 0;
 $GLOBALS['ss_test_remote_get'] = function () use ( &$pc_calls ) {
