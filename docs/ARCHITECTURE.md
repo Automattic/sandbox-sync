@@ -23,6 +23,7 @@ mu-plugin/
     trait-sync-runner-files.php    Code/uploads planning, transfer, activation, rollback
     class-job.php                  Persistent job record, lease, log, history helpers
     class-files.php                Manifests, diffs, installs, symlink discovery
+    class-plugin-compare.php       Sandbox vs live plugin versions, kept symlinks, release channel
     class-uploads-state.php        Per-partition uploads cursor + generation journal
     class-db-exporter.php          Chunked SQL export (source)
     class-table-delta.php          Posts/postmeta index planning + delta application

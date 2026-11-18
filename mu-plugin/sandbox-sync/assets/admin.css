@@ -26,6 +26,18 @@
 .sbs-picker .sbs-meta { color: #787c82; font-size: 12px; }
 .sbs-picker code { font-size: 11px; background: #f6f7f7; padding: 1px 4px; }
 .sbs-picker .sbs-symlinked { opacity: .55; }
+/* Plugin rows: sandbox version, kept symlinks and release channel. */
+.sbs-picker .sbs-kept { color: #50575e; }
+.sbs-picker .sbs-badge {
+	display: inline-block; padding: 0 6px; border-radius: 9px;
+	font-size: 11px; line-height: 18px; background: #f0f0f1; color: #3c434a;
+}
+.sbs-picker .sbs-differs { background: #fcf0d6; color: #7a5200; }
+.sbs-picker .sbs-channel { background: #e7f0f8; color: #135e96; }
+.sbs-picker .sbs-channel-line {
+	padding: 4px 0 6px; margin-bottom: 4px; border-bottom: 1px solid #f0f0f1;
+	color: #3c434a; font-size: 12px;
+}
 
 /* Safety rules */
 .sbs-rule { display: flex; gap: 8px; align-items: baseline; padding: 5px 0; }

@@ -36,6 +36,7 @@ require_once SANDBOX_SYNC_DIR . '/class-table-delta.php';
 require_once SANDBOX_SYNC_DIR . '/class-db-shell.php';
 require_once SANDBOX_SYNC_DIR . '/class-db-shell-dump-reader.php';
 require_once SANDBOX_SYNC_DIR . '/class-files.php';
+require_once SANDBOX_SYNC_DIR . '/class-plugin-compare.php';
 require_once SANDBOX_SYNC_DIR . '/class-uploads-state.php';
 require_once SANDBOX_SYNC_DIR . '/class-source-state.php';
 require_once SANDBOX_SYNC_DIR . '/class-source-endpoints.php';

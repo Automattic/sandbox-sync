@@ -19,5 +19,6 @@ require __DIR__ . '/test-plan.php';
 require __DIR__ . '/test-job.php';
 require __DIR__ . '/test-safety.php';
 require __DIR__ . '/test-table-delta.php';
+require __DIR__ . '/test-plugin-compare.php';
 
 ss_test_summary();
