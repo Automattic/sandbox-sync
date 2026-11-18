@@ -39,7 +39,8 @@ class Plugin_Compare {
 
 	/**
 	 * Option in which Newspack Manager records the branch it last installed.
-	 * Only read here, never written.
+	 * Only read here, never written. After a sync that includes the database
+	 * it holds live's value, not this site's.
 	 */
 	const BRANCH_OPTION = 'newspack_manager_release_channel_branch';
 
@@ -203,6 +204,15 @@ class Plugin_Compare {
 	/**
 	 * Counts for the start confirmation and the job report.
 	 *
+	 * They count plugins as the picker lists them, one per plugin file, so
+	 * the numbers match the rows marked there. Two plugins that share a
+	 * directory count as two, although the sync replaces or keeps that
+	 * directory as one entry.
+	 *
+	 * The confirmation is built in the browser from the boxes ticked at that
+	 * moment, so admin.js keeps the same count (pluginSummaryLines). Change
+	 * the two together.
+	 *
 	 * @param array[]       $rows      annotate() rows.
 	 * @param string[]|null $selection The job's 'plugins' option: top-level
 	 *                                 entries the sync is limited to, null
@@ -227,16 +237,20 @@ class Plugin_Compare {
 	}
 
 	/**
-	 * Release channel of this site, by the rules Newspack Manager applies to
-	 * its own packages, so the picker and Manager's own screen agree. Read
-	 * from disk, so Manager need not be active:
+	 * Release channel of this site, read from disk by the rules Newspack
+	 * Manager applies to its own packages, so Manager need not be active:
 	 *
 	 *  - a package symlink names its channel by its target; the most forward
 	 *    one found wins (canary, then alpha, then release), because a switch
 	 *    leaves packages with no prerelease on their stable link;
 	 *  - a real directory with a backup link is a branch build, and backup
 	 *    links decide the base only when no package symlink names a channel;
-	 *  - a recorded branch name counts even when no build is found on disk.
+	 *  - the recorded branch name only labels a build found on disk.
+	 *
+	 * The last rule is stricter than Manager's, which also reports a recorded
+	 * name when it finds no build. The name is an option, and a sync that
+	 * includes the database replaces the options table with live's: with no
+	 * build on this disk, the name may describe the live site instead.
 	 *
 	 * @param array[] $plugin_links  link_states() of plugins/.
 	 * @param array[] $theme_links   link_states() of themes/.
@@ -267,15 +281,12 @@ class Plugin_Compare {
 		if ( '' === $base ) {
 			$base = self::most_forward_channel( $backed_up );
 		}
-		$branch = self::branch_name( $stored_branch );
-		if ( '' !== $branch ) {
-			$has_branch = true;
-		}
 
 		$label = isset( self::CHANNEL_LABELS[ $base ] ) ? self::CHANNEL_LABELS[ $base ] : '';
 		if ( ! $has_branch ) {
 			return $label;
 		}
+		$branch  = self::branch_name( $stored_branch );
 		$layered = '' !== $branch ? 'branch ' . $branch : 'an unknown branch';
 		return '' !== $label ? $label . ', with ' . $layered . ' layered on top' : $layered;
 	}

@@ -293,6 +293,28 @@ ss_assert_same(
 	'no rows, no counts'
 );
 
+// The counts follow the picker's rows, one per plugin file: two plugins that
+// share a directory are two rows, and both change when it is synced.
+$pc_shared = Plugin_Compare::annotate(
+	array(
+		ss_pc_live_row( 'shared/one.php', '1.1' ),
+		ss_pc_live_row( 'shared/two.php', '2.1' ),
+	),
+	array(
+		'shared/one.php' => ss_pc_local_row( 'shared/one.php', '1.0' ),
+		'shared/two.php' => ss_pc_local_row( 'shared/two.php', '2.0' ),
+	),
+	array()
+);
+ss_assert_same(
+	array(
+		'version_changes' => 2,
+		'kept_symlinks'   => 0,
+	),
+	Plugin_Compare::summarize( (array) $pc_shared, array( 'shared' ) ),
+	'two plugins in one directory count as two, as the picker lists them'
+);
+
 ss_test_section( 'Plugin compare: release channel of the sandbox' );
 
 function ss_pc_branch_build( $backup_target ) {
@@ -391,13 +413,23 @@ ss_assert_same(
 );
 ss_assert_same( 'branch feat/x', ss_pc_channel_label( array( 'a' => ss_pc_branch_build( '../../../wordpress/plugins/a/6.20.1' ) ), array(), 'feat/x' ), 'a branch build whose backup names no channel has a branch but no base' );
 ss_assert_same( 'an unknown branch', ss_pc_channel_label( array( 'a' => ss_pc_branch_build( '' ) ) ), 'a branch build with neither base nor name is an unknown branch' );
-ss_assert_same( 'Alpha, with branch fix/bar layered on top', ss_pc_channel_label( array( 'a' => $pc_alpha ), array(), 'fix/bar' ), 'a recorded branch counts even when no build is found on disk, as in Newspack Manager' );
-ss_assert_same( 'branch trunk', ss_pc_channel_label( array(), array(), 'trunk' ), 'a recorded branch with nothing else recognisable is still reported' );
+// The recorded name is a database option, and a sync that includes the
+// database replaces it with live's. Without a build on this disk it may
+// describe the live site, so it is not reported.
+ss_assert_same( 'Alpha', ss_pc_channel_label( array( 'a' => $pc_alpha ), array(), 'fix/bar' ), 'a recorded branch is not reported when no build is found on disk' );
+ss_assert_same( '', ss_pc_channel_label( array(), array(), 'trunk' ), 'a recorded branch on its own names no channel' );
 
+// The name only shows beside a build found on disk, so that is where a bad
+// value has to be ignored.
+$pc_built = array(
+	'a' => $pc_alpha,
+	'b' => ss_pc_branch_build( '../../../wordpress/plugins/b/alpha' ),
+);
+ss_assert_same( 'Alpha, with branch fix/foo layered on top', ss_pc_channel_label( $pc_built, array(), 'fix/foo' ), 'a plain branch name is shown beside the build' );
 foreach ( array( "fix/foo\nFAILED: injected", ' padded ', '-leading-dash', '/leading-slash', 'trailing/', 'a..b', 'a//b', 'has space', str_repeat( 'x', 256 ), array( 'fix/foo' ), 42, null ) as $pc_bad_branch ) {
 	ss_assert_same(
-		'Alpha',
-		ss_pc_channel_label( array( 'a' => $pc_alpha ), array(), $pc_bad_branch ),
+		'Alpha, with an unknown branch layered on top',
+		ss_pc_channel_label( $pc_built, array(), $pc_bad_branch ),
 		'a recorded value that is not a plain branch name is ignored: ' . wp_json_encode( $pc_bad_branch )
 	);
 }
@@ -643,7 +675,7 @@ $pc_not_on_live['manifest']['dirs'] = array( 'uploads' );
 $pc_job_no_dir                      = ss_pc_record_plugin_changes( $pc_not_on_live );
 ss_assert( ! array_key_exists( 'plugin_changes', $pc_job_skipped ) && array() === $pc_job_skipped['log'], 'a job that does not sync plugins/ records and logs nothing' );
 ss_assert( ! array_key_exists( 'plugin_changes', $pc_job_no_dir ) && array() === $pc_job_no_dir['log'], 'nor does a job whose source has no plugins/ directory to sync' );
-ss_assert_same( 0, $pc_reads, "and neither asks live for its plugin list" );
+ss_assert_same( 0, $pc_reads, 'and neither asks live for its plugin list' );
 
 unset( $GLOBALS['ss_test_remote_get'] );
 $GLOBALS['ss_test_plugins'] = array();
