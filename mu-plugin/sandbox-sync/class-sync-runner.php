@@ -138,7 +138,9 @@ class Sync_Runner {
 
 	/**
 	 * Sandbox entries that can be a plugin or a theme: real directories, plus
-	 * single PHP files in plugins/. Any other stray file keeps following live.
+	 * single PHP files in plugins/. Any other stray file keeps following live,
+	 * and so does index.php: it guards the directory and is no plugin, and a
+	 * live site that reports its plugins only would never account for it.
 	 *
 	 * @param string $dir     'plugins' or 'themes'.
 	 * @param array  $listing Files::top_level_listing() of the sandbox directory.
@@ -148,7 +150,7 @@ class Sync_Runner {
 		$candidates = isset( $listing['dirs'] ) && is_array( $listing['dirs'] ) ? $listing['dirs'] : array();
 		if ( 'plugins' === $dir && isset( $listing['files'] ) && is_array( $listing['files'] ) ) {
 			foreach ( $listing['files'] as $file ) {
-				if ( is_string( $file ) && 'php' === strtolower( (string) pathinfo( $file, PATHINFO_EXTENSION ) ) ) {
+				if ( is_string( $file ) && 'index.php' !== $file && 'php' === strtolower( (string) pathinfo( $file, PATHINFO_EXTENSION ) ) ) {
 					$candidates[] = $file;
 				}
 			}
@@ -285,25 +287,79 @@ class Sync_Runner {
 	 * Sandbox-only entries the next sync removes because no earlier sync is
 	 * recorded yet, for the start confirmation: the one time this still
 	 * happens deserves to be said before the sync starts, not in its log.
-	 * Empty once a record exists, and where live cannot report its layout.
+	 * Empty once a record exists. Null where live's directory cannot be
+	 * listed: the sync removes what live lacks all the same, but whether the
+	 * sandbox has such entries, and which, cannot be said.
 	 *
-	 * @param mixed $response Decoded response of the source `plugins` action.
-	 * @return array{plugins:string[],themes:string[]}
+	 * @param mixed $response Decoded response of the source `plugins` action, or its error.
+	 * @return array{plugins:string[]|null,themes:string[]|null}
 	 */
 	public static function preview_first_sync_removals( $response ) {
 		$removals = array();
 		foreach ( self::KEPT_DIRS as $dir => $option ) {
 			$removals[ $dir ] = array();
-			$live             = self::live_top_levels( $response, $dir );
-			if ( is_array( get_option( $option ) ) || ! is_array( $live['real'] ) ) {
+			if ( is_array( get_option( $option ) ) ) {
 				continue;
 			}
-			$protected        = 'plugins' === $dir ? self::PROTECTED_PLUGINS : array();
-			$candidates       = self::kept_candidates( $dir, Files::top_level_listing( WP_CONTENT_DIR . '/' . $dir ) );
+			$protected  = 'plugins' === $dir ? self::PROTECTED_PLUGINS : array();
+			$candidates = array_diff( self::kept_candidates( $dir, Files::top_level_listing( WP_CONTENT_DIR . '/' . $dir ) ), $protected );
+			$live       = self::live_top_levels( $response, $dir );
+			if ( ! is_array( $live['real'] ) ) {
+				$removals[ $dir ] = array() === $candidates ? array() : null;
+				continue;
+			}
 			$kept             = self::kept_top_level_names( $candidates, $live['real'], null, $live['links'], $protected );
-			$removals[ $dir ] = self::sorted_names( array_diff( $candidates, $protected, $live['real'], $kept ) );
+			$removals[ $dir ] = self::sorted_names( array_diff( $candidates, $live['real'], $kept ) );
 		}
 		return $removals;
+	}
+
+	/**
+	 * Code directories from which a sync with these options still removes
+	 * sandbox-only entries: the selected ones no earlier sync has recorded.
+	 * A per-plugin selection leaves every plugin outside it alone.
+	 *
+	 * @param array $options Sync options: 'dirs' and, for a per-plugin selection, 'plugins'.
+	 * @return string[]
+	 */
+	public static function first_sync_dirs( $options ) {
+		$selected = isset( $options['dirs'] ) && is_array( $options['dirs'] ) ? $options['dirs'] : array();
+		$dirs     = array();
+		foreach ( self::KEPT_DIRS as $dir => $option ) {
+			if ( ! in_array( $dir, $selected, true ) || is_array( get_option( $option ) ) ) {
+				continue;
+			}
+			if ( 'plugins' === $dir && isset( $options['plugins'] ) && is_array( $options['plugins'] ) ) {
+				continue;
+			}
+			$dirs[] = $dir;
+		}
+		return $dirs;
+	}
+
+	/**
+	 * What a first sync removes from the given directories, one sentence
+	 * each, for the command line. The wp-admin confirmation lists the same
+	 * from preview_first_sync_removals().
+	 *
+	 * @param mixed    $response Decoded response of the source `plugins` action, or its error.
+	 * @param string[] $dirs     Result of first_sync_dirs().
+	 * @return string[]
+	 */
+	public static function first_sync_removal_lines( $response, $dirs ) {
+		$removals = self::preview_first_sync_removals( $response );
+		$lines    = array();
+		foreach ( $removals as $dir => $names ) {
+			if ( ! in_array( $dir, (array) $dirs, true ) ) {
+				continue;
+			}
+			if ( null === $names ) {
+				$lines[] = sprintf( 'No earlier sync is recorded for %1$s/, so this one still removes any %1$s only this sandbox has. Live\'s %1$s could not be listed, so they cannot be named here.', $dir );
+			} elseif ( array() !== $names ) {
+				$lines[] = sprintf( 'No earlier sync is recorded for %1$s/, so this one still removes the %1$s only this sandbox has: %2$s.', $dir, implode( ', ', $names ) );
+			}
+		}
+		return $lines;
 	}
 
 	/**
@@ -1033,16 +1089,20 @@ class Sync_Runner {
 		}
 		// A sync that does not plan plugins/ still replaces the activation
 		// list, so it needs the same answer about which plugins live lacks.
-		if ( ! isset( $job['kept_plugins'] ) ) {
+		// It asks only when that answer can change something. When live
+		// answers with an error, the sync goes on without it; a request that
+		// got no answer stops the step, like any other request here.
+		$carry_candidates = isset( $job['kept_plugins'] ) ? array() : self::activation_carry_candidates( $job );
+		if ( array() !== $carry_candidates ) {
 			$live_tops = self::live_tops( $job );
-			if ( is_wp_error( $live_tops ) ) {
+			if ( is_wp_error( $live_tops ) && ! self::live_answered_unusably( $live_tops ) ) {
 				return $live_tops;
 			}
 			$checkpoint = self::checkpoint( $job );
 			if ( is_wp_error( $checkpoint ) ) {
 				return $checkpoint;
 			}
-			self::plan_activation_carry( $job, $live_tops );
+			self::plan_activation_carry( $job, $live_tops, $carry_candidates );
 		}
 		Job::save( $job );
 		return array( 'message' => sprintf( 'Database manifest refreshed after online pre-copy: %d tables rebound to fresh row/checksum metadata.', count( $manifest['tables'] ) ) );

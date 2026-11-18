@@ -18,5 +18,6 @@ if ( ! class_exists( 'WP_CLI' ) ) {
 		public static function log( ...$args ) {}
 		public static function line( ...$args ) {}
 		public static function success( ...$args ) {}
+		public static function warning( ...$args ) {}
 	}
 }

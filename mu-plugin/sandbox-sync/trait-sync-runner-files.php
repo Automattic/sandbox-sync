@@ -1574,10 +1574,13 @@ trait Sync_Runner_Files {
 			return new \WP_Error( 'backup_cleanup', "Cannot clear previous job backup {$backup}." );
 		}
 		// Stored before the swap, so that a rollback steps around the same
-		// entries the swap left where they were.
-		$left                                = self::entries_left_in_place( $job, $dir, $target, $stage );
-		$job['working_dirs'][ $dir ]['left'] = $left['leave'];
-		$checkpoint                          = self::checkpoint( $job );
+		// entries the swap left where they were, and removes only the ones
+		// the swap brought in.
+		$left                                    = self::entries_left_in_place( $job, $dir, $target, $stage );
+		$promoted                                = self::real_entries( $stage );
+		$job['working_dirs'][ $dir ]['left']     = $left['leave'];
+		$job['working_dirs'][ $dir ]['promoted'] = $promoted;
+		$checkpoint                              = self::checkpoint( $job );
 		if ( is_wp_error( $checkpoint ) ) {
 			return $checkpoint;
 		}
@@ -1589,7 +1592,7 @@ trait Sync_Runner_Files {
 		// children instead; protected symlinks stay put.
 		$content_dirs = array( 'plugins', 'mu-plugins', 'themes' );
 		if ( in_array( $dir, $content_dirs, true ) ) {
-			$swapped = self::activate_dir_by_contents( $target, $stage, $backup, $left['leave'] );
+			$swapped = self::activate_dir_by_contents( $target, $stage, $backup, $left['leave'], $promoted );
 			if ( is_wp_error( $swapped ) ) {
 				return $swapped;
 			}
@@ -1646,8 +1649,7 @@ trait Sync_Runner_Files {
 		$settled = isset( $job[ 'in_place_' . $dir ] ) && is_array( $job[ 'in_place_' . $dir ] ) ? $job[ 'in_place_' . $dir ] : array();
 		$late    = array();
 		if ( isset( $job[ 'planned_' . $dir ] ) && is_array( $job[ 'planned_' . $dir ] ) ) {
-			$now = Files::top_level_listing( $target );
-			foreach ( array_merge( $now['dirs'], $now['files'] ) as $name ) {
+			foreach ( self::real_entries( $target ) as $name ) {
 				if ( in_array( $name, $job[ 'planned_' . $dir ], true ) || in_array( $name, $settled, true ) ) {
 					continue;
 				}
@@ -1664,26 +1666,41 @@ trait Sync_Runner_Files {
 	}
 
 	/**
+	 * Top-level entries of a directory that are not symlinks: what a content
+	 * swap brings in from the stage, or puts back from the rollback copy.
+	 * Symlinks are left out, because a rollback never removes one.
+	 *
+	 * @param string $dir Staged or rollback directory.
+	 * @return string[] Sorted names.
+	 */
+	private static function real_entries( $dir ) {
+		$listing = Files::top_level_listing( $dir );
+		return self::sorted_names( array_merge( $listing['dirs'], $listing['files'] ) );
+	}
+
+	/**
 	 * Activates a staged code tree without renaming the target directory.
 	 * Moves every non-symlink child of $target into $backup, then every child
 	 * of $stage into $target. Existing symlinks in $target are left untouched
 	 * (and matching stage entries are discarded), and so is every entry named
 	 * in $leave: it is never moved, so it cannot be lost to a failed swap.
 	 *
-	 * @param string   $target Active directory.
-	 * @param string   $stage  Staged directory.
-	 * @param string   $backup Rollback directory, created here.
-	 * @param string[] $leave  Top-level entries of $target to leave where they are.
+	 * @param string        $target   Active directory.
+	 * @param string        $stage    Staged directory.
+	 * @param string        $backup   Rollback directory, created here.
+	 * @param string[]      $leave    Top-level entries of $target to leave where they are.
+	 * @param string[]|null $promoted Real entries of $stage, when the caller has already listed them.
 	 * @return true|\WP_Error
 	 */
-	private static function activate_dir_by_contents( $target, $stage, $backup, $leave = array() ) {
+	private static function activate_dir_by_contents( $target, $stage, $backup, $leave = array(), $promoted = null ) {
 		if ( ! is_dir( $target ) && ! mkdir( $target, 0755, true ) ) {
 			return new \WP_Error( 'file_activate', "Cannot create target directory {$target}." );
 		}
 		if ( ! mkdir( $backup, 0755, true ) ) {
 			return new \WP_Error( 'file_activate', "Cannot create rollback directory {$backup}." );
 		}
-		$evacuated = self::move_dir_children(
+		$promoted = is_array( $promoted ) ? $promoted : self::real_entries( $stage );
+		$failed   = self::move_dir_children(
 			$target,
 			$backup,
 			array(
@@ -1691,30 +1708,60 @@ trait Sync_Runner_Files {
 				'skip_names'    => $leave,
 			)
 		);
-		if ( is_wp_error( $evacuated ) ) {
-			self::move_dir_children( $backup, $target, array( 'preserve_symlinks_in_to' => true ) );
-			self::delete_recursive( $backup );
-			return $evacuated;
+		// Nothing was promoted when the evacuation failed.
+		$brought_in = array();
+		if ( ! is_wp_error( $failed ) ) {
+			$brought_in = $promoted;
+			$failed     = self::move_dir_children(
+				$stage,
+				$target,
+				array(
+					'preserve_symlinks_in_to' => true,
+					'preserve_names_in_to'    => $leave,
+				)
+			);
 		}
-		$promoted = self::move_dir_children(
-			$stage,
-			$target,
-			array(
-				'preserve_symlinks_in_to' => true,
-				'preserve_names_in_to'    => $leave,
-			)
-		);
-		if ( is_wp_error( $promoted ) ) {
+		if ( is_wp_error( $failed ) ) {
 			// Roll forward failed: put the previous children back.
-			self::delete_dir_children( $target, true, $leave );
-			self::move_dir_children( $backup, $target, array( 'preserve_symlinks_in_to' => true ) );
-			self::delete_recursive( $backup );
-			return $promoted;
+			$undone = self::undo_content_swap( $target, $backup, $leave, $brought_in );
+			if ( is_wp_error( $undone ) && is_dir( $backup ) ) {
+				return new \WP_Error( 'file_activate', $failed->get_error_message() . " Putting the previous entries back failed too ({$undone->get_error_message()}); those not yet restored are kept in {$backup}." );
+			}
+			return $failed;
 		}
 		if ( is_dir( $stage ) ) {
 			self::delete_recursive( $stage );
 		}
 		return true;
+	}
+
+	/**
+	 * Reverses a content swap, finished or not: removes what the swap brought
+	 * in from the stage, then puts back what it moved into the rollback copy.
+	 * An entry that is neither appeared in the directory on its own and
+	 * stays, like the entries the swap left in place and every symlink. The
+	 * rollback copy is deleted only once everything in it is back: after a
+	 * restore that could not finish, it is the one place those entries exist.
+	 *
+	 * @param string        $target   Active directory.
+	 * @param string        $backup   Rollback copy.
+	 * @param string[]      $leave    Entries the swap left in place.
+	 * @param string[]|null $promoted Real entries the swap took from the stage. Null when that was not
+	 *                                noted, by a swap an earlier release made: every real entry outside
+	 *                                $leave is then removed.
+	 * @return true|\WP_Error
+	 */
+	private static function undo_content_swap( $target, $backup, $leave, $promoted ) {
+		$remove   = is_array( $promoted ) ? array_merge( $promoted, self::real_entries( $backup ) ) : self::real_entries( $target );
+		$removed  = self::delete_dir_children( $target, true, array_diff( $remove, (array) $leave ) );
+		$restored = self::move_dir_children( $backup, $target, array( 'preserve_symlinks_in_to' => true ) );
+		if ( is_wp_error( $restored ) ) {
+			return $restored;
+		}
+		if ( is_dir( $backup ) ) {
+			self::delete_recursive( $backup );
+		}
+		return is_wp_error( $removed ) ? $removed : true;
 	}
 
 	/**
@@ -1775,14 +1822,14 @@ trait Sync_Runner_Files {
 	}
 
 	/**
-	 * Deletes every non-symlink top-level child of $dir (the directory itself stays).
+	 * Deletes non-symlink top-level children of $dir (the directory itself stays).
 	 *
-	 * @param string   $dir           Directory to empty.
-	 * @param bool     $skip_symlinks Leave symlinks alone.
-	 * @param string[] $skip_names    Entries to leave alone: the ones a content swap never moved.
+	 * @param string        $dir           Directory to empty.
+	 * @param bool          $skip_symlinks Leave symlinks alone.
+	 * @param string[]|null $only_names    Delete these entries and no others, or null for every entry.
 	 * @return true|\WP_Error
 	 */
-	private static function delete_dir_children( $dir, $skip_symlinks = true, $skip_names = array() ) {
+	private static function delete_dir_children( $dir, $skip_symlinks = true, $only_names = null ) {
 		if ( ! is_dir( $dir ) ) {
 			return true;
 		}
@@ -1798,7 +1845,7 @@ trait Sync_Runner_Files {
 			if ( $skip_symlinks && is_link( $path ) ) {
 				continue;
 			}
-			if ( in_array( $entry, (array) $skip_names, true ) ) {
+			if ( is_array( $only_names ) && ! in_array( $entry, $only_names, true ) ) {
 				continue;
 			}
 			if ( ! self::delete_recursive( $path ) ) {
@@ -2155,19 +2202,61 @@ trait Sync_Runner_Files {
 	}
 
 	/**
+	 * Plugins whose activation a sync that does not plan plugins/ may have to
+	 * carry: the sandbox's own real entries, provided its swap replaces the
+	 * options table, where the activation list lives. Empty when there is
+	 * nothing to carry. Live's layout cannot change the outcome then, and is
+	 * not asked for.
+	 *
+	 * @param array $job Job.
+	 * @return string[] Sorted top-level names.
+	 */
+	private static function activation_carry_candidates( $job ) {
+		$prefix = isset( $job['manifest']['site']['prefix'] ) ? (string) $job['manifest']['site']['prefix'] : '';
+		$scope  = self::transfer_table_scope( $job );
+		if ( ! in_array( $prefix . 'options', $scope['tables'], true ) ) {
+			return array();
+		}
+		$candidates = self::kept_candidates( 'plugins', Files::top_level_listing( WP_CONTENT_DIR . '/plugins' ) );
+		return self::sorted_names( array_diff( $candidates, self::PROTECTED_PLUGINS ) );
+	}
+
+	/**
+	 * Whether live answered a request, but with something that cannot be
+	 * used: an error status, or a body that is not the expected JSON. A
+	 * request that got no answer is a different failure. It leaves the
+	 * connection in doubt, and with it everything the sync does next.
+	 *
+	 * @param \WP_Error $error Error the client returned.
+	 * @return bool
+	 */
+	private static function live_answered_unusably( $error ) {
+		$code = (string) $error->get_error_code();
+		return 1 === preg_match( '/^http_\d{3}$/', $code ) || in_array( $code, array( 'bad_json', 'response_too_large' ), true );
+	}
+
+	/**
 	 * Decides, for a sync that does not plan plugins/, which plugins keep
 	 * their activation across the database swap: the same rule as the plan
 	 * step, with live's reported layout standing in for its file manifest.
+	 * That layout refines the answer and nothing more, so a database sync
+	 * does not fail because live could not give it: the sandbox's own record
+	 * then decides.
 	 *
-	 * @param array $job       Job; updated.
-	 * @param array $live_tops Result of live_tops().
+	 * @param array           $job        Job; updated, and logged to when live did not report its layout.
+	 * @param array|\WP_Error $live_tops  Result of live_tops().
+	 * @param string[]        $candidates Result of activation_carry_candidates().
 	 */
-	private static function plan_activation_carry( &$job, $live_tops ) {
+	private static function plan_activation_carry( &$job, $live_tops, $candidates ) {
+		if ( is_wp_error( $live_tops ) ) {
+			Job::log( $job, sprintf( 'Live did not report the layout of its plugins/ directory (%s). Which plugins stay active across the database swap is decided from this sandbox\'s own record of earlier syncs.', $live_tops->get_error_message() ) );
+			$live_tops = array();
+		}
 		$live   = isset( $live_tops['plugins'] ) && is_array( $live_tops['plugins'] ) ? $live_tops['plugins'] : array();
 		$record = get_option( self::OPT_SYNCED_PLUGINS );
 
 		$job['activation_kept'] = self::kept_top_level_names(
-			self::kept_candidates( 'plugins', Files::top_level_listing( WP_CONTENT_DIR . '/plugins' ) ),
+			$candidates,
 			isset( $live['real'] ) && is_array( $live['real'] ) ? $live['real'] : array(),
 			is_array( $record ) ? $record : null,
 			isset( $live['links'] ) ? $live['links'] : array(),
@@ -2677,13 +2766,17 @@ trait Sync_Runner_Files {
 					// Host forbids renaming the target directory; restore by
 					// swapping children back. Never delete_recursive($target).
 					// Entries the swap left in place were never moved to the
-					// backup, so deleting them here would destroy them.
-					self::delete_dir_children( $state['target'], true, isset( $state['left'] ) ? (array) $state['left'] : array() );
-					if ( ! empty( $state['had_target'] ) && is_dir( $state['backup'] ) ) {
-						self::move_dir_children( $state['backup'], $state['target'], array( 'preserve_symlinks_in_to' => true ) );
-					}
-					if ( is_dir( $state['backup'] ) ) {
-						self::delete_recursive( $state['backup'] );
+					// backup, and an entry that appeared after the swap is in
+					// neither place: the undo steps around both.
+					$undone = self::undo_content_swap(
+						$state['target'],
+						$state['backup'],
+						isset( $state['left'] ) ? (array) $state['left'] : array(),
+						isset( $state['promoted'] ) && is_array( $state['promoted'] ) ? $state['promoted'] : null
+					);
+					if ( is_wp_error( $undone ) ) {
+						$kept_at = is_dir( $state['backup'] ) ? " Entries not yet restored are kept in {$state['backup']}." : '';
+						Job::log( $job, "ROLLBACK OF {$dir}/ INCOMPLETE: {$undone->get_error_message()}{$kept_at}" );
 					}
 					++$rolled;
 					continue;

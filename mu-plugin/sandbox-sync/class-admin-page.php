@@ -254,6 +254,9 @@ class Admin_Page {
 		$job         = Job::get();
 		$admin_config = wp_json_encode(
 			array(
+				// What the start confirmation says about a first sync until live
+				// has answered, and if it never does: entries may go, unnamed.
+				'firstSync'  => Sync_Runner::preview_first_sync_removals( null ),
 				'nonce'      => wp_create_nonce( self::NONCE_ACTION ),
 				'initialJob' => Job::public_state( $job ),
 			),

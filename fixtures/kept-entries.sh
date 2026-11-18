@@ -5,6 +5,7 @@
 #
 # Usage: fixtures/kept-entries.sh <phase> <source-path> <sandbox-path>
 #   seed          before the first sync (the sandbox has no record yet)
+#   verify-notice once the pair is connected, still before the first sync
 #   verify-first  after the first sync
 #   change        before a later sync: local installs, removals on the source
 #   verify-kept   after any later sync
@@ -75,6 +76,11 @@ assert_left_in_place() {
 	done
 }
 
+# What `run` says before it starts, taken from a dry run, which changes nothing.
+start_notice() {
+	wp sandbox-sync run --path="$SANDBOX" --user=admin --dry-run 2>&1 || fail 'the dry run failed'
+}
+
 # record_has <option> <name>: whether the record of synced entries lists <name>.
 record_has() {
 	wp option get "$1" --format=json --path="$SANDBOX" | NAME="$2" php -r '$names = json_decode( stream_get_contents( STDIN ), true ); exit( is_array( $names ) && in_array( getenv( "NAME" ), $names, true ) ? 0 : 1 );'
@@ -103,6 +109,20 @@ case "$PHASE" in
 		write_plugin "$SANDBOX_CONTENT/plugins/ss-first-sync-only" ss-first-sync-only 'SS First Sync Only'
 		;;
 
+	verify-notice)
+		# The one sync that still removes sandbox-only entries says which,
+		# before it starts, and does not count a build it keeps among them.
+		notice="$(start_notice)"
+		case "$notice" in
+			*'still removes the plugins only this sandbox has: ss-first-sync-only.'*) ;;
+			*) fail 'the first sync does not name the sandbox-only plugin it removes' ;;
+		esac
+		case "$notice" in
+			*ss-managed-plugin* | *ss-managed-theme*) fail 'a build the first sync keeps is announced as removed' ;;
+		esac
+		[ -d "$SANDBOX_CONTENT/plugins/ss-first-sync-only" ] || fail 'the dry run removed a plugin'
+		;;
+
 	verify-first)
 		[ -f "$SANDBOX_CONTENT/plugins/ss-live-plugin/ss-live-plugin.php" ] || fail 'the source plugin did not arrive'
 		[ -f "$SANDBOX_CONTENT/themes/ss-live-theme/style.css" ] || fail 'the source theme did not arrive'
@@ -113,6 +133,10 @@ case "$PHASE" in
 		record_has sandbox_sync_synced_themes ss-live-theme || fail 'the themes record does not list what the sync wrote'
 		! record_has sandbox_sync_synced_plugins ss-managed-plugin || fail 'the plugins record lists a build the sync never wrote'
 		! record_has sandbox_sync_synced_themes ss-managed-theme || fail 'the themes record lists a build the sync never wrote'
+		notice="$(start_notice)"
+		case "$notice" in
+			*'No earlier sync is recorded'*) fail 'a sandbox with a record is still told that its next sync removes sandbox-only entries' ;;
+		esac
 		;;
 
 	change)

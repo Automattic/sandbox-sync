@@ -179,6 +179,16 @@ class CLI {
 			$options['config_constants'] = array_map( 'trim', explode( ',', $assoc_args['constants'] ) );
 		}
 
+		// The one case in which a sync still removes plugins and themes that
+		// only this sandbox has: no earlier sync is recorded. Said here, ahead
+		// of the prompt, so that a dry run and a --yes run are told as well.
+		$first_sync_dirs = Sync_Runner::first_sync_dirs( $options );
+		if ( ! empty( $first_sync_dirs ) ) {
+			foreach ( Sync_Runner::first_sync_removal_lines( Client::get_json( 'plugins' ), $first_sync_dirs ) as $line ) {
+				\WP_CLI::warning( $line );
+			}
+		}
+
 		if ( ! empty( $assoc_args['dry-run'] ) ) {
 			$session = Client::begin_transfer_session( $options );
 			if ( is_wp_error( $session ) ) {

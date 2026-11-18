@@ -271,18 +271,24 @@ function loadSourceMeta() {
 
 // Plugins and themes only this sandbox has: what the next sync leaves in
 // place, and what it still removes while no earlier sync is recorded.
-// Previewed with the source meta, so empty until that request answers.
+// Previewed with the source meta. Until that request answers, nothing is
+// promised as kept, and a first sync is announced without names.
 let keptPreview = { plugins: [], themes: [] };
-let firstSyncRemovals = { plugins: [], themes: [] };
+let firstSyncRemovals = config.firstSync || { plugins: [], themes: [] };
 
 function keptSummary( dirs, pluginSelection ) {
 	const names = ( list, dir ) => ( dirs.includes( dir ) && Array.isArray( list[ dir ] ) ? list[ dir ] : [] );
 	return [ 'plugins', 'themes' ].map( ( dir ) => {
 		const kept = names( keptPreview, dir );
 		// A per-plugin selection leaves every sandbox-only plugin out of the run.
-		const removed = 'plugins' === dir && pluginSelection ? [] : names( firstSyncRemovals, dir );
+		const spared = 'plugins' === dir && pluginSelection;
+		const removed = spared ? [] : names( firstSyncRemovals, dir );
+		// Null: live's directory could not be listed, so whether there are
+		// such entries, and which, is not known.
+		const unnamed = ! spared && dirs.includes( dir ) && null === firstSyncRemovals[ dir ];
 		return ( kept.length ? '• sandbox-only ' + dir + ' kept: ' + kept.join( ', ' ) + '\n' : '' )
-			+ ( removed.length ? '• sandbox-only ' + dir + ' removed (no earlier sync recorded): ' + removed.join( ', ' ) + '\n' : '' );
+			+ ( removed.length ? '• sandbox-only ' + dir + ' removed (no earlier sync recorded): ' + removed.join( ', ' ) + '\n' : '' )
+			+ ( unnamed ? '• any sandbox-only ' + dir + ' are removed (no earlier sync recorded; live\'s ' + dir + ' could not be listed)\n' : '' );
 	} ).join( '' );
 }
 

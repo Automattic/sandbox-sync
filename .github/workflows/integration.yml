@@ -96,6 +96,7 @@ jobs:
           ! grep -q 'DB_PASSWORD\|AUTH_KEY\|=' <<<"$CONSTANTS"
           wp eval-file "$GITHUB_WORKSPACE/fixtures/check-constants-scope.php" --path=/tmp/sandbox
           wp eval-file "$GITHUB_WORKSPACE/fixtures/check-resumable-file.php" --path=/tmp/sandbox
+          bash "$GITHUB_WORKSPACE/fixtures/kept-entries.sh" verify-notice /tmp/source /tmp/sandbox
           wp sandbox-sync run --path=/tmp/sandbox --user=admin --constants=SANDBOX_SYNC_TEST --yes
       - name: Verify activation, identity, safety and cleanup
         run: |
